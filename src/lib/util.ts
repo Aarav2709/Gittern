@@ -59,7 +59,7 @@ export async function copyText(text: string) {
   }
 }
 
-const REPO_SECTIONS = new Set(['tree', 'blob', 'issues', 'pulls', 'pull', 'commits', 'commit', 'actions', 'releases']);
+const REPO_SECTIONS = new Set(['tree', 'blob', 'issues', 'pulls', 'pull', 'commits', 'commit', 'actions', 'releases', 'branches']);
 const TOP_LEVEL = new Set(['notifications', 'pulls', 'issues', 'search']);
 /** github.com first path segments that are site pages, not users/orgs. */
 const RESERVED = new Set([
@@ -100,9 +100,13 @@ export function routeFromUrl(href: string): string | null {
   const base = `/${owner}/${repo}/${section}`;
   switch (section) {
     case 'actions':
+      if (rest[0] === 'runs' && /^\d+$/.test(rest[1] ?? '')) return `${base}/runs/${rest[1]}`;
+      return rest.length ? null : base;
     case 'releases':
+    case 'branches':
       return rest.length ? null : base;
     case 'issues':
+      if (rest[0] === 'new') return `${base}/new`;
       return rest.length === 0 ? base + u.search : /^\d+$/.test(rest[0]) ? `${base}/${rest[0]}` : null;
     case 'pull':
       if (!/^\d+$/.test(rest[0] ?? '')) return null;

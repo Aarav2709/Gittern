@@ -108,12 +108,14 @@ export const queryClient = new QueryClient({
 
 type MaybePath = string | null | false | undefined;
 
-export function useGh<T = any>(path: MaybePath, o?: Pick<GhOptions, 'accept' | 'text'> & { refetchInterval?: number }) {
+type Interval = number | false | ((query: { state: { data?: any } }) => number | false);
+
+export function useGh<T = any>(path: MaybePath, o?: Pick<GhOptions, 'accept' | 'text'> & { refetchInterval?: Interval }) {
   return useQuery<T, GhError>({
     queryKey: ['gh', path, o?.accept ?? ''],
     queryFn: () => gh<T>(path as string, o),
     enabled: !!path,
-    refetchInterval: o?.refetchInterval,
+    refetchInterval: o?.refetchInterval as any,
   });
 }
 
