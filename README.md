@@ -1,6 +1,8 @@
 # Gittern
 
-Gittern is github.com but native: a fast, monochrome desktop client for GitHub.
+Gittern is github.com but native: a fast, desktop client for GitHub.
+
+https://github.com/user-attachments/assets/11819e07-fb28-4fdb-83ae-c91e3573c0df
 
 - **Browse**: home dashboard, explore, profiles and organizations (people, teams, followers), repositories, code with the last commit per file, blame, line links and permalinks, commits, branches, tags, releases, search (repositories, code, issues, pull requests, commits, users, topics).
 - **Issues and pull requests**: timeline, comments, reactions, assignees, labels, milestones, reviewers, issue templates, lock, pin, subscribe. Pull requests add inline review comments and threads, pending reviews, split or unified diffs with syntax highlighting, viewed files, commits and checks tabs, merge with a custom message, auto-merge, update branch, delete branch.
