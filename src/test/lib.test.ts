@@ -6,6 +6,7 @@ import { itemState } from '../components/ui';
 import { splitHighlighted } from '../lib/highlight';
 import { isNewer, newThreads } from '../lib/inbox';
 import { duration, fuzzyScore, parseLineHash, plural, routeFromUrl } from '../lib/util';
+import { remoteRoute, splitPatch } from '../pages/Desktop';
 import { parseTemplate } from '../pages/Issues';
 
 describe('routeFromUrl', () => {
@@ -187,5 +188,46 @@ describe('tabs', () => {
     expect(store.tabAt((i) => i - 1)).toBe('/b');
     store.recordNav('/b', false);
     expect(store.tabStep(-1)).toBe('/a');
+  });
+});
+
+describe('desktop mode', () => {
+  it('splits git diff output per file', () => {
+    const raw = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      'index 1..2 100644',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -1,2 +1,2 @@',
+      ' keep',
+      '-old',
+      '+new',
+      'diff --git a/gone.txt b/gone.txt',
+      'deleted file mode 100644',
+      '--- a/gone.txt',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      '-bye',
+      'diff --git a/old name.md b/new name.md',
+      'similarity index 100%',
+      'rename from old name.md',
+      'rename to new name.md',
+      '',
+    ].join('\n');
+    const files = splitPatch(raw);
+    expect(files.map((f) => [f.filename, f.status, f.additions, f.deletions])).toEqual([
+      ['src/a.ts', 'modified', 1, 1],
+      ['gone.txt', 'removed', 0, 1],
+      ['new name.md', 'renamed', 0, 0],
+    ]);
+    expect(files[0].patch).toBe('@@ -1,2 +1,2 @@\n keep\n-old\n+new');
+    expect(files[2].previous_filename).toBe('old name.md');
+    expect(files[2].patch).toBeUndefined();
+    expect(splitPatch('')).toEqual([]);
+  });
+  it('links an origin to its page', () => {
+    expect(remoteRoute('https://github.com/cli/cli.git', 'github.com')).toBe('/cli/cli');
+    expect(remoteRoute('git@github.com:rust-lang/rust.git\n', 'github.com')).toBe('/rust-lang/rust');
+    expect(remoteRoute('https://gitlab.com/a/b.git', 'github.com')).toBeNull();
   });
 });

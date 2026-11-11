@@ -11,6 +11,7 @@ import { Home } from './pages/Home';
 import { GlobalIssues, IssueDetail, IssueList, NewIssue } from './pages/Issues';
 import { Actions, ActionsStorage, RunDetail } from './pages/Actions';
 import { DiscussionDetail, Discussions, NewDiscussion } from './pages/Discussions';
+import { Desktop } from './pages/Desktop';
 import { Explore } from './pages/Explore';
 import { GistDetail, GistForm, Gists } from './pages/Gists';
 import { Branches, Login, Notifications, ReleaseByTag, ReleaseForm, Releases, RepoSearch, Search, Tags } from './pages/Misc';
@@ -43,6 +44,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="pulls" element={<GlobalIssues kind="pr" />} />
               <Route path="issues" element={<GlobalIssues kind="issue" />} />
               <Route path="explore" element={<Explore />} />
+              <Route path="local" element={<Desktop />} />
               <Route path="settings" element={<Settings />} />
               <Route path="gists" element={<Gists />} />
               <Route path="gists/new" element={<GistForm />} />
