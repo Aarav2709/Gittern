@@ -41,7 +41,7 @@ export function Commits() {
   }
 
   return (
-    <div className="stack narrow">
+    <div className="stack">
       <h2 className="section-title">
         Commits on <code className="ref">{ref}</code>
         {path && <span className="muted"> · {path}</span>}
@@ -52,11 +52,11 @@ export function Commits() {
       {groups.map((g) => (
         <section key={g.day}>
           <div className="group-title">{g.day}</div>
-          <div className="card list">
+          <div className="card">
             {g.commits.map((c) => (
               <div key={c.sha} className="row">
                 <div className="row-main">
-                  <Link to={`/${repo.full_name}/commit/${c.sha}`} className="issue-title">
+                  <Link to={`/${repo.full_name}/commit/${c.sha}`} className="row-link">
                     {c.commit.message.split('\n')[0]}
                   </Link>
                   <div className="meta">

@@ -137,7 +137,7 @@ function RepoList({ path }: { path: string }) {
       {q.error && <ErrorBox error={q.error} />}
       {!q.isLoading && shown.length === 0 && <p className="muted pad">No repositories to show.</p>}
       {shown.length > 0 && (
-        <div className="card list">
+        <div className="card">
           {shown.map((r) => (
             <RepoRow key={r.id} repo={r} showOwner={path.includes('/starred')} />
           ))}
