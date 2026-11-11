@@ -26,6 +26,9 @@ Videos embedded in readmes and comments open in your browser instead of playing 
 | Key | Action |
 | --- | --- |
 | `Ctrl K` or `/` | Search, jump to `owner/repo`, or paste a GitHub URL |
+| `Ctrl T` / `Ctrl W` | New tab / close tab |
+| `Ctrl` click or middle click | Open a link in a background tab |
+| `Ctrl B` | Show or hide the sidebar |
 | `Alt ←` / `Alt →` | Back / forward |
 | `Ctrl R` | Refresh data |
-| `T` | Go to file, on a repository's code page |
+| `T` | Go to file, on a repository's Files page |
