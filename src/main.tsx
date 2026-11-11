@@ -3,20 +3,27 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HashRouter, Route, Routes } from 'react-router-dom';
 import { Shell } from './components/Shell';
-import { Empty, Loading } from './components/ui';
+import { ConfirmHost, Empty, Loading, Toasts } from './components/ui';
 import { queryClient } from './lib/api';
 import { AuthProvider } from './lib/auth';
 import { Commit, Commits } from './pages/Commits';
 import { Home } from './pages/Home';
 import { GlobalIssues, IssueDetail, IssueList, NewIssue } from './pages/Issues';
-import { Actions, Branches, Login, Notifications, Releases, RunDetail, Search } from './pages/Misc';
+import { Actions, ActionsStorage, RunDetail } from './pages/Actions';
+import { DiscussionDetail, Discussions, NewDiscussion } from './pages/Discussions';
+import { Explore } from './pages/Explore';
+import { GistDetail, GistForm, Gists } from './pages/Gists';
+import { Branches, Login, Notifications, ReleaseByTag, ReleaseForm, Releases, RepoSearch, Search, Tags } from './pages/Misc';
+import { Deployments, Insights, Labels, MilestoneDetail, Milestones, People, ProjectDetail, Projects, Security } from './pages/RepoMore';
+import { Settings } from './pages/Settings';
 import { FileEditor, NewPull, NewRepo, RepoSettings } from './pages/Manage';
 import { Profile } from './pages/Profile';
-import { Blob, Code, RepoLayout } from './pages/Repo';
+import { Blob } from './pages/Blob';
+import { Code, RepoLayout } from './pages/Repo';
 import { activeTabPath } from './lib/store';
 import './styles.css';
 
-// Reopen on whatever the active tab was showing last time.
+// reopen on whatever the active tab was showing last time
 if (!location.hash) location.hash = activeTabPath();
 
 createRoot(document.getElementById('root')!).render(
@@ -24,7 +31,7 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider
         loading={<Loading label="Connecting to GitHub…" />}
-        fallback={(signIn, error) => <Login signIn={signIn} error={error} />}
+        fallback={(api, error) => <Login api={api} error={error} />}
       >
         <HashRouter>
           <Routes>
@@ -35,6 +42,12 @@ createRoot(document.getElementById('root')!).render(
               <Route path="new" element={<NewRepo />} />
               <Route path="pulls" element={<GlobalIssues kind="pr" />} />
               <Route path="issues" element={<GlobalIssues kind="issue" />} />
+              <Route path="explore" element={<Explore />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path="gists" element={<Gists />} />
+              <Route path="gists/new" element={<GistForm />} />
+              <Route path="gist/:id" element={<GistDetail />} />
+              <Route path="gist/:id/edit" element={<GistForm />} />
               <Route path=":owner" element={<Profile />} />
               <Route path=":owner/:repo" element={<RepoLayout />}>
                 <Route index element={<Code />} />
@@ -43,13 +56,37 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="edit/*" element={<FileEditor />} />
                 <Route path="new/*" element={<FileEditor create />} />
                 <Route path="compare" element={<NewPull />} />
+                <Route path="compare/*" element={<NewPull />} />
+                <Route path="search" element={<RepoSearch />} />
+                <Route path="discussions" element={<Discussions />} />
+                <Route path="discussions/new" element={<NewDiscussion />} />
+                <Route path="discussions/:number" element={<DiscussionDetail />} />
+                <Route path="labels" element={<Labels />} />
+                <Route path="milestones" element={<Milestones />} />
+                <Route path="milestone/:number" element={<MilestoneDetail />} />
+                <Route path="stargazers" element={<People kind="stargazers" />} />
+                <Route path="watchers" element={<People kind="subscribers" />} />
+                <Route path="forks" element={<People kind="forks" />} />
+                <Route path="insights" element={<Insights />} />
+                <Route path="security" element={<Security />} />
+                <Route path="projects" element={<Projects />} />
+                <Route path="projects/:number" element={<ProjectDetail />} />
+                <Route path="deployments" element={<Deployments />} />
+                <Route path="tags" element={<Tags />} />
+                <Route path="releases/new" element={<ReleaseForm />} />
+                <Route path="releases/edit/:id" element={<ReleaseForm />} />
+                <Route path="releases/tag/*" element={<ReleaseByTag />} />
+                <Route path="actions/artifacts" element={<ActionsStorage />} />
                 <Route path="settings" element={<RepoSettings />} />
                 <Route path="issues" element={<IssueList kind="issue" />} />
                 <Route path="pulls" element={<IssueList kind="pr" />} />
                 <Route path="issues/new" element={<NewIssue />} />
                 <Route path="issues/:number" element={<IssueDetail />} />
                 <Route path="pull/:number" element={<IssueDetail />} />
-                <Route path="pull/:number/files" element={<IssueDetail files />} />
+                <Route path="pull/:number/files" element={<IssueDetail view="files" />} />
+                <Route path="pull/:number/commits" element={<IssueDetail view="commits" />} />
+                <Route path="pull/:number/checks" element={<IssueDetail view="checks" />} />
+                <Route path="blame/*" element={<Blob blame />} />
                 <Route path="commits/*" element={<Commits />} />
                 <Route path="commit/:sha" element={<Commit />} />
                 <Route path="actions" element={<Actions />} />
@@ -63,6 +100,8 @@ createRoot(document.getElementById('root')!).render(
           </Routes>
         </HashRouter>
       </AuthProvider>
+      <Toasts />
+      <ConfirmHost />
     </QueryClientProvider>
   </StrictMode>,
 );
