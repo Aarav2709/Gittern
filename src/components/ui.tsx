@@ -16,7 +16,7 @@ import {
   XIcon,
 } from '@primer/octicons-react';
 import DOMPurify from 'dompurify';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { GhError } from '../lib/api';
 import { dismissToast, settleConfirm, useConfirmRequest, useToasts } from '../lib/feedback';
@@ -83,7 +83,20 @@ export function UserLink({ user, avatar }: { user: any; avatar?: number }) {
   );
 }
 
+// one shared minute tick keeps every relative time current
+const tickers = new Set<() => void>();
+let minute = 0;
+setInterval(() => {
+  minute++;
+  tickers.forEach((l) => l());
+}, 60_000);
+const onTick = (l: () => void) => {
+  tickers.add(l);
+  return () => tickers.delete(l);
+};
+
 export function Time({ iso }: { iso: string }) {
+  useSyncExternalStore(onTick, () => minute);
   return <time title={fullDate(iso)}>{timeAgo(iso)}</time>;
 }
 
@@ -125,17 +138,20 @@ function prepareHtml(html: string, base?: MarkdownBase): string {
     const src = el.getAttribute('src') ?? el.querySelector('source')?.getAttribute('src');
     const link = doc.createElement('a');
     link.className = 'media-link';
-    link.textContent = inlineMedia ? 'Open in browser' : `Play ${el.tagName.toLowerCase()} in browser`;
+    link.textContent = `Play ${el.tagName.toLowerCase()} in browser`;
     if (src) {
       link.setAttribute('href', src);
       link.setAttribute('data-external', '');
     }
+    // github wraps videos in a collapsible with a caret and the file name; show just the video
+    const wrap = el.closest('details');
+    const shell = wrap?.querySelector('summary') ? wrap : el;
     if (inlineMedia && src?.startsWith('https://')) {
       el.setAttribute('controls', '');
       el.setAttribute('preload', 'metadata');
       el.removeAttribute('autoplay');
-      el.after(link);
-    } else el.replaceWith(link);
+      if (shell !== el) shell.replaceWith(el);
+    } else shell.replaceWith(link);
   });
   if (base) {
     doc.querySelectorAll('a[href]').forEach((a) => {
