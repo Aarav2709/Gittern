@@ -15,13 +15,16 @@ import {
   IssueOpenedIcon,
   LawIcon,
   LinkIcon,
+  PencilIcon,
   PinIcon,
+  PlusIcon,
   PlayIcon,
   RepoForkedIcon,
   SearchIcon,
   StarFillIcon,
   StarIcon,
   TagIcon,
+  TrashIcon,
   TriangleDownIcon,
 } from '@primer/octicons-react';
 import { useQuery } from '@tanstack/react-query';
@@ -77,6 +80,29 @@ function StarButton({ repo }: { repo: any }) {
   );
 }
 
+function ForkButton({ repo }: { repo: any }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const fork = async () => {
+    if (!window.confirm(`Fork ${repo.full_name} to your account?`)) return;
+    setBusy(true);
+    try {
+      const created = await gh<any>(`/repos/${repo.full_name}/forks`, { method: 'POST' });
+      await invalidate('/user/repos');
+      navigate(`/${created.full_name}`);
+    } catch (e) {
+      window.alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn" disabled={busy} onClick={fork}>
+      <RepoForkedIcon /> {busy ? 'Forking…' : 'Fork'} <span className="count">{compact(repo.forks_count)}</span>
+    </button>
+  );
+}
+
 function WatchButton({ repo }: { repo: any }) {
   const path = `/repos/${repo.full_name}/subscription`;
   const q = useGh<any>(path);
@@ -115,13 +141,14 @@ export function RepoLayout() {
   const base = `/${repo.full_name}`;
   const pinned = favorites.some((f) => f.full_name === repo.full_name);
   const tabs = [
-    { to: base, label: 'Code', icon: <CodeIcon />, on: ['', 'tree', 'blob'] },
+    { to: base, label: 'Code', icon: <CodeIcon />, on: ['', 'tree', 'blob', 'edit', 'new'] },
     ...(repo.has_issues ? [{ to: `${base}/issues`, label: 'Issues', icon: <IssueOpenedIcon />, on: ['issues'], count: counts?.issues.totalCount }] : []),
-    { to: `${base}/pulls`, label: 'Pull requests', icon: <GitPullRequestIcon />, on: ['pulls', 'pull'], count: counts?.pullRequests.totalCount },
+    { to: `${base}/pulls`, label: 'Pull requests', icon: <GitPullRequestIcon />, on: ['pulls', 'pull', 'compare'], count: counts?.pullRequests.totalCount },
     { to: `${base}/actions`, label: 'Actions', icon: <PlayIcon />, on: ['actions'] },
     { to: `${base}/commits`, label: 'Commits', icon: <GitCommitIcon />, on: ['commits', 'commit'] },
     { to: `${base}/branches`, label: 'Branches', icon: <GitBranchIcon />, on: ['branches'] },
     { to: `${base}/releases`, label: 'Releases', icon: <TagIcon />, on: ['releases'] },
+    ...(repo.permissions?.admin ? [{ to: `${base}/settings`, label: 'Settings', icon: <GearIcon />, on: ['settings'] }] : []),
   ];
 
   return (
@@ -146,9 +173,7 @@ export function RepoLayout() {
             <PinIcon /> {pinned ? 'Pinned' : 'Pin'}
           </button>
           <WatchButton repo={repo} />
-          <a className="btn" href={`${repo.html_url}/fork`} data-external title="Fork on github.com">
-            <RepoForkedIcon /> Fork <span className="count">{compact(repo.forks_count)}</span>
-          </a>
+          <ForkButton repo={repo} />
           <StarButton repo={repo} />
         </div>
       </div>
@@ -656,6 +681,11 @@ export function Code() {
           <button className="btn" onClick={() => setFinder(true)} title="Go to file (T)">
             <SearchIcon /> Go to file
           </button>
+          {repo.permissions?.push && (
+            <Link className="btn" to={`/${repo.full_name}/new/${ref}${path ? '/' + path : ''}`}>
+              <PlusIcon /> Add file
+            </Link>
+          )}
           <CloneMenu repo={repo} />
         </div>
         <div className="card">
@@ -702,7 +732,7 @@ export function Code() {
               <BookIcon /> README
             </div>
             <div className="pad-lg">
-              <Markdown html={readme.data} />
+              <Markdown html={readme.data} base={{ repo: repo.full_name, ref, dir: path }} />
             </div>
           </div>
         )}
@@ -741,6 +771,7 @@ export function Blob() {
   const name = path.split('/').pop() ?? '';
   const isImage = IMAGE_EXT.test(name);
   const isMarkdown = /\.(md|markdown|mdx)$/i.test(name);
+  const navigate = useNavigate();
   const [mode, setMode] = useState<'preview' | 'code'>('preview');
   // The contents API omits inline content above 1 MB; fetch those raw.
   const tooBig = !!meta.data && !Array.isArray(meta.data) && !meta.data.content && meta.data.size > 0;
@@ -762,6 +793,16 @@ export function Blob() {
   if (meta.error) return <ErrorBox error={meta.error} />;
   if (Array.isArray(meta.data)) return <Navigate replace to={`/${repo.full_name}/tree/${ref}/${path}`} />;
   const file = meta.data;
+  const remove = async () => {
+    if (!window.confirm(`Delete ${path} from ${ref}? This commits directly to the branch.`)) return;
+    try {
+      await gh(`/repos/${repo.full_name}/contents/${encPath(path)}`, { method: 'DELETE', body: { message: `Delete ${name}`, sha: file.sha, branch: ref } });
+      await invalidate(`/repos/${repo.full_name}`);
+      navigate(`/${repo.full_name}/tree/${ref}${path.includes('/') ? '/' + path.slice(0, path.lastIndexOf('/')) : ''}`, { replace: true });
+    } catch (e) {
+      window.alert((e as Error).message);
+    }
+  };
   const lines = decoded ? decoded.text.replace(/\n$/, '').split('\n').length : 0;
   const ext = name.split('.').pop()!.toLowerCase();
 
@@ -777,7 +818,7 @@ export function Blob() {
       </div>
     );
   } else if (isMarkdown && mode === 'preview') {
-    body = rendered.isLoading ? <Loading /> : <div className="pad-lg">{<Markdown html={rendered.data ?? ''} />}</div>;
+    body = rendered.isLoading ? <Loading /> : <div className="pad-lg"><Markdown html={rendered.data ?? ''} base={{ repo: repo.full_name, ref, dir: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '' }} /></div>;
   } else if (raw.isLoading) {
     body = <Loading />;
   } else if (!decoded || decoded.binary) {
@@ -831,8 +872,18 @@ export function Blob() {
               <CopyIcon /> Copy
             </button>
           )}
+          {repo.permissions?.push && decoded && !decoded.binary && (
+            <Link className="btn sm" to={`/${repo.full_name}/edit/${ref}/${path}`}>
+              <PencilIcon /> Edit
+            </Link>
+          )}
+          {repo.permissions?.push && (
+            <button className="btn sm" onClick={remove}>
+              <TrashIcon /> Delete
+            </button>
+          )}
           <a className="btn sm" href={file.html_url} data-external>
-            Open on github.com
+            Open on GitHub
           </a>
         </div>
         {body}

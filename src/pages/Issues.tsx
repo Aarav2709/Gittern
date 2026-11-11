@@ -154,9 +154,9 @@ export function IssueList({ kind }: { kind: 'issue' | 'pr' }) {
             New issue
           </Link>
         ) : (
-          <a className="btn" data-external href={`${repo.html_url}/compare`} title="Opens github.com">
+          <Link className="btn primary" to={`/${repo.full_name}/compare`}>
             New pull request
-          </a>
+          </Link>
         )
       }
     />
