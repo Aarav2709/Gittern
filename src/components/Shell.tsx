@@ -104,6 +104,17 @@ function describeTab(path: string): { title: string; icon: ReactNode } {
   }
 }
 
+function useMedia(query: string): boolean {
+  const [match, setMatch] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const on = () => setMatch(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [query]);
+  return match;
+}
+
 export function Shell() {
   const navigate = useNavigate();
   const loc = useLocation();
@@ -114,13 +125,26 @@ export function Shell() {
   const [theme, setTheme] = useState<Theme>(() => stored('theme', 'system') as Theme);
   const fetching = useIsFetching() > 0;
   const here = loc.pathname + loc.search;
+  // In a narrow window the sidebar is an overlay that is closed until asked for.
+  const narrow = useMedia('(max-width: 860px)');
+  const [overlay, setOverlay] = useState(false);
+  const showSidebar = narrow ? overlay : sidebar;
 
-  // New navigations start at the top; back/forward keep the restored position.
+  // The content pane is the scroller: new pages start at the top, back/forward restore.
+  const mainRef = useRef<HTMLElement>(null);
+  const scrolls = useRef(new Map<string, number>());
   useEffect(() => {
     syncActivePath(here);
-    if (navType !== 'POP') window.scrollTo(0, 0);
     setPalette(false);
-  }, [here, navType]);
+    setOverlay(false);
+    const el = mainRef.current;
+    if (!el) return;
+    el.scrollTop = navType === 'POP' ? (scrolls.current.get(loc.key) ?? 0) : 0;
+    const key = loc.key;
+    return () => {
+      scrolls.current.set(key, el.scrollTop);
+    };
+  }, [loc.key]);
 
   const newTab = (path = '/') => {
     openTab(path, true);
@@ -130,11 +154,13 @@ export function Shell() {
     const next = closeTab(id);
     if (next !== null) navigate(next);
   };
-  const toggleSidebar = () =>
+  const toggleSidebar = () => {
+    if (narrow) return setOverlay((v) => !v);
     setSidebar((v) => {
       store('sidebar', v ? 'closed' : 'open');
       return !v;
     });
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -181,7 +207,7 @@ export function Shell() {
       document.removeEventListener('click', onClick);
       document.removeEventListener('auxclick', onClick);
     };
-  }, [navigate, active]);
+  }, [navigate, active, narrow]);
 
   const cycleTheme = () => {
     const next: Theme = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
@@ -191,8 +217,9 @@ export function Shell() {
   };
 
   return (
-    <div className={`app ${sidebar ? '' : 'no-sidebar'}`}>
-      {sidebar && <Sidebar here={here} theme={theme} cycleTheme={cycleTheme} openPalette={() => setPalette(true)} />}
+    <div className={`app ${showSidebar && !narrow ? '' : 'no-sidebar'}`}>
+      {narrow && overlay && <div className="backdrop" onClick={() => setOverlay(false)} />}
+      {showSidebar && <Sidebar here={here} theme={theme} cycleTheme={cycleTheme} openPalette={() => setPalette(true)} />}
       <div className="workspace">
         <header className="tabbar">
           <button className="icon-btn" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)">
@@ -242,7 +269,7 @@ export function Shell() {
             <SyncIcon />
           </button>
         </header>
-        <main>
+        <main ref={mainRef}>
           <Outlet />
         </main>
       </div>
@@ -286,7 +313,10 @@ function Sidebar({ here, theme, cycleTheme, openPalette }: { here: string; theme
   const { viewer, source, signOut } = useAuth();
   const unread = useGh<any[]>('/notifications?per_page=50', { refetchInterval: 60_000 });
   const favorites = useRepoList('favorites');
-  const recents = useRepoList('recents').filter((r) => !favorites.some((f) => f.full_name === r.full_name));
+  const repos = useGh<any[]>('/user/repos?sort=pushed&per_page=30&affiliation=owner,collaborator,organization_member');
+  const [filter, setFilter] = useState('');
+  const [more, setMore] = useState(false);
+  const shownRepos = (repos.data ?? []).filter((r) => r.full_name.toLowerCase().includes(filter.toLowerCase()));
   const count = unread.data?.length ?? 0;
 
   return (
@@ -323,7 +353,26 @@ function Sidebar({ here, theme, cycleTheme, openPalette }: { here: string; theme
         <SideLink to="/issues?filter=mentions" icon={<MentionIcon />} label="Mentioned" here={here} />
       </div>
       <RepoLinks title="Pinned" repos={favorites} here={here} />
-      <RepoLinks title="Recent" repos={recents} here={here} />
+      <div className="side-group">
+        <div className="side-heading">Repositories</div>
+        <input className="input side-filter" placeholder="Find a repository…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        {shownRepos.slice(0, more || filter ? 30 : 7).map((r) => (
+          <Link
+            key={r.id}
+            to={`/${r.full_name}`}
+            title={r.full_name}
+            className={`side-link ${here === `/${r.full_name}` || here.startsWith(`/${r.full_name}/`) ? 'active' : ''}`}
+          >
+            <img className="avatar square" src={`${r.owner.avatar_url}&s=40`} width={16} height={16} alt="" />
+            <span className="side-label">{r.full_name}</span>
+          </Link>
+        ))}
+        {!filter && shownRepos.length > 7 && (
+          <button className="side-link" onClick={() => setMore((v) => !v)}>
+            <span className="side-label">{more ? 'Show less' : 'Show more'}</span>
+          </button>
+        )}
+      </div>
       <span className="spacer" />
       <Dropdown
         className="side-link account"
