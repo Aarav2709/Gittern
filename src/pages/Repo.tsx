@@ -342,7 +342,7 @@ export function PathCrumbs({ repo, gitRef, path }: { repo: Repo; gitRef: string;
   );
 }
 
-function CloneMenu({ repo }: { repo: Repo }) {
+function CloneMenu({ repo, onFind, addTo }: { repo: Repo; onFind: () => void; addTo?: string }) {
   const [copied, setCopied] = useState('');
   const rows = [
     { label: 'HTTPS', value: repo.clone_url },
@@ -359,8 +359,18 @@ function CloneMenu({ repo }: { repo: Repo }) {
         </>
       }
     >
-      {() => (
+      {(close) => (
         <div className="menu wide pad">
+          <div className="clone-actions" onClick={close}>
+            <button className="btn" onClick={onFind}>
+              <SearchIcon /> Go to file <kbd>T</kbd>
+            </button>
+            {addTo && (
+              <Link className="btn" to={addTo}>
+                <PlusIcon /> Add file
+              </Link>
+            )}
+          </div>
           <strong>Clone</strong>
           {rows.map((r) => (
             <div key={r.label} className="clone-row">
@@ -771,15 +781,7 @@ export function Code() {
             )
           )}
           <span className="spacer" />
-          <button className="btn" onClick={() => setFinder(true)} title="Go to file (T)">
-            <SearchIcon /> Go to file
-          </button>
-          {repo.permissions?.push && (
-            <Link className="btn" to={`/${repo.full_name}/new/${ref}${path ? '/' + path : ''}`}>
-              <PlusIcon /> Add file
-            </Link>
-          )}
-          <CloneMenu repo={repo} />
+          <CloneMenu repo={repo} onFind={() => setFinder(true)} addTo={repo.permissions?.push ? `/${repo.full_name}/new/${ref}${path ? '/' + path : ''}` : undefined} />
         </div>
         <div className="card">
           <LatestCommit repo={repo} gitRef={ref} path={path} total={path ? undefined : counts?.defaultBranchRef?.target?.history?.totalCount} />

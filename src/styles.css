@@ -565,19 +565,19 @@ a { color: inherit; }
 .mode-switch a.on { background: var(--surface); color: var(--fg); box-shadow: 0 0 0 1px var(--border); }
 main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .local { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.local-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); flex-wrap: wrap; }
+.local-bar { display: flex; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border-soft); flex-wrap: wrap; }
 .local-pick { display: flex; align-items: center; gap: 10px; min-width: 190px; max-width: 280px; height: 44px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); text-align: left; }
 .local-pick:hover { background: var(--hover); }
 .local-pick > span { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 16px; }
 .local-pick strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .local-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-.local-tabs { padding: 10px 12px; border-right: 1px solid var(--border-soft); }
+.local-tabs { padding: 12px; border-right: 1px solid var(--border-soft); }
 .local-tabs .segmented { display: flex; }
 .local-tabs .segmented > * { flex: 1; justify-content: center; }
 .local-list { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border-soft); }
-.local-list-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-block: 1px solid var(--border-soft); color: var(--fg-muted); font-size: 12px; }
+.local-list-head { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-block: 1px solid var(--border-soft); color: var(--fg-muted); font-size: 12px; }
 .local-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.local-file, .local-commit { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+.local-file, .local-commit { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
 .local-commit { flex-direction: column; align-items: stretch; gap: 0; padding: 8px 12px; }
 .local-file:hover, .local-commit:hover { background: var(--hover); }
 .local-file.active, .local-commit.active { background: color-mix(in srgb, var(--blue) 16%, transparent); box-shadow: inset 2px 0 0 var(--blue); }
@@ -585,7 +585,7 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .local-file:hover .local-discard, .local-discard:focus-visible { opacity: 1; }
 .commit-box { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
 .commit-box textarea.input { min-height: 64px; }
-.local-diff { grid-column: 2; grid-row: 1 / 3; min-width: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.local-diff { grid-column: 2; grid-row: 1 / 3; min-width: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .local-welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 24px; }
 .local-welcome .toolbar { justify-content: center; }
 .clone-list { max-height: 46vh; }
@@ -598,3 +598,13 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .tabs.fit { position: relative; overflow: visible; }
 .tabs.fit > .dropdown { margin-bottom: -1px; }
 .tab-hidden { position: absolute; visibility: hidden; pointer-events: none; }
+.check-row { display: inline-flex; align-items: center; gap: 8px; }
+.local-bar > .btn, .local-bar > .icon-btn { height: 44px; padding-inline: 16px; }
+.local-bar > .icon-btn { width: 44px; padding: 0; }
+.local-bar > .dropdown > .icon-btn { width: 44px; height: 44px; border: 1px solid var(--border); border-radius: 8px; }
+.local-bar > .btn { border-radius: 8px; }
+.local-file > span:last-child { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; }
+.local-file input, .local-list-head input { width: 14px; height: 14px; flex-shrink: 0; }
+.commit-box .link-btn { align-self: center; }
+.clone-actions { display: flex; gap: 8px; }
+.clone-actions > * { flex: 1; }
