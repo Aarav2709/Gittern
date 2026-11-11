@@ -390,7 +390,7 @@ export function DiffFile({
           </p>
         ) : split ? (
           <div className="diff-scroll">
-            <div className="diff-lines split">
+            <div className="diff-lines sbs">
               {splitRows(lines).map((r, i) =>
                 r.full ? (
                   <div key={i} className={`dl ${r.full.t}`}>
