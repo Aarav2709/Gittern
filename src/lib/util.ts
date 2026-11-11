@@ -20,6 +20,18 @@ export function timeAgo(iso: string): string {
   return 'just now';
 }
 
+/** Compact age for dense lists: 5m, 2h, 3d, 4w, 7mo, 2y. */
+export function shortAgo(iso: string): string {
+  const m = Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return 'now';
+  if (m < 60) return `${Math.floor(m)}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h`;
+  if (m < 10080) return `${Math.floor(m / 1440)}d`;
+  if (m < 43830) return `${Math.floor(m / 10080)}w`;
+  if (m < 525960) return `${Math.floor(m / 43830)}mo`;
+  return `${Math.floor(m / 525960)}y`;
+}
+
 export const fullDate = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 

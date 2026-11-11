@@ -1,5 +1,4 @@
 import {
-  PlayIcon,
   BookIcon,
   CheckIcon,
   CodeIcon,
@@ -9,23 +8,25 @@ import {
   FileIcon,
   FileSubmoduleIcon,
   GitBranchIcon,
-  GitPullRequestIcon,
   HistoryIcon,
-  IssueOpenedIcon,
   LawIcon,
   LinkIcon,
+  PinIcon,
   RepoForkedIcon,
+  SearchIcon,
   StarFillIcon,
   StarIcon,
   TagIcon,
   TriangleDownIcon,
 } from '@primer/octicons-react';
+import { useQuery } from '@tanstack/react-query';
 import hljs from 'highlight.js/lib/common';
-import { useMemo, useState } from 'react';
-import { Link, Navigate, Outlet, useLocation, useOutletContext, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, Navigate, Outlet, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { Avatar, Dropdown, ErrorBox, Loading, Markdown, RepoGlyph, Segmented, Time } from '../components/ui';
-import { ACCEPT, gh, invalidate, useGh, useGql } from '../lib/api';
-import { compact, copyText, encPath, formatBytes } from '../lib/util';
+import { ACCEPT, gh, gql, invalidate, useGh, useGql } from '../lib/api';
+import { toggleFavorite, useRepoList, visitRepo } from '../lib/store';
+import { compact, copyText, encPath, formatBytes, shortAgo } from '../lib/util';
 
 /** Monochrome ramp: the biggest language is the brightest segment. */
 const tone = (i: number) => `color-mix(in srgb, var(--fg) ${Math.max(14, 92 - i * 20)}%, transparent)`;
@@ -37,8 +38,18 @@ query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     issues(states: OPEN) { totalCount }
     pullRequests(states: OPEN) { totalCount }
+    branches: refs(refPrefix: "refs/heads/") { totalCount }
+    tags: refs(refPrefix: "refs/tags/") { totalCount }
+    releases { totalCount }
+    latestRelease { tagName name publishedAt }
+    defaultBranchRef { target { ... on Commit { history { totalCount } } } }
   }
 }`;
+
+/** Shared by the sidebar and the code page, so it is fetched once per repository. */
+export function useRepoCounts(owner: string | undefined, name: string | undefined, enabled = true) {
+  return useGql<any>('repo-counts', COUNTS_QUERY, { owner, name }, enabled && !!owner && !!name);
+}
 
 function StarButton({ repo }: { repo: any }) {
   const path = `/user/starred/${repo.full_name}`;
@@ -64,24 +75,17 @@ function StarButton({ repo }: { repo: any }) {
 
 export function RepoLayout() {
   const { owner, repo: name } = useParams();
-  const section = useLocation().pathname.split('/')[3] ?? '';
   const q = useGh<any>(`/repos/${owner}/${name}`);
-  const counts = useGql<any>('repo-counts', COUNTS_QUERY, { owner, name }, q.isSuccess);
+  const repo = q.data;
+  const favorites = useRepoList('favorites');
+
+  useEffect(() => {
+    if (repo) visitRepo({ full_name: repo.full_name, avatar_url: repo.owner.avatar_url });
+  }, [repo?.full_name]);
 
   if (q.isLoading) return <Loading />;
-  if (q.error) return <ErrorBox error={q.error} />;
-  const repo = q.data;
-  const base = `/${repo.full_name}`;
-  const c = counts.data?.repository;
-  const tabs = [
-    { to: base, label: 'Code', icon: <CodeIcon />, on: ['', 'tree', 'blob', 'commits', 'commit'] },
-    ...(repo.has_issues
-      ? [{ to: `${base}/issues`, label: 'Issues', icon: <IssueOpenedIcon />, on: ['issues'], count: c?.issues.totalCount }]
-      : []),
-    { to: `${base}/pulls`, label: 'Pull requests', icon: <GitPullRequestIcon />, on: ['pulls', 'pull'], count: c?.pullRequests.totalCount },
-    { to: `${base}/actions`, label: 'Actions', icon: <PlayIcon />, on: ['actions'] },
-    { to: `${base}/releases`, label: 'Releases', icon: <TagIcon />, on: ['releases'] },
-  ];
+  if (q.error) return <ErrorBox error={q.error} retry={q.refetch} />;
+  const pinned = favorites.some((f) => f.full_name === repo.full_name);
 
   return (
     <div className="page repo">
@@ -92,19 +96,23 @@ export function RepoLayout() {
             {repo.owner.login}
           </Link>
           <span className="muted">/</span>
-          <Link to={base} className="repo-name">
+          <Link to={`/${repo.full_name}`} className="repo-name">
             {repo.name}
           </Link>
           <span className="badge">{repo.private ? 'Private' : 'Public'}</span>
           {repo.archived && <span className="badge warn">Archived</span>}
         </h1>
         <div className="repo-actions">
-          <span className="btn static">
-            <EyeIcon /> Watching <span className="count">{compact(repo.subscribers_count)}</span>
-          </span>
-          <span className="btn static">
-            <RepoForkedIcon /> Forks <span className="count">{compact(repo.forks_count)}</span>
-          </span>
+          <button
+            className={`btn ${pinned ? 'starred' : ''}`}
+            title={pinned ? 'Remove from sidebar favorites' : 'Keep in sidebar favorites'}
+            onClick={() => toggleFavorite({ full_name: repo.full_name, avatar_url: repo.owner.avatar_url })}
+          >
+            <PinIcon /> {pinned ? 'Pinned' : 'Pin'}
+          </button>
+          <a className="btn" href={`${repo.html_url}/fork`} data-external title="Fork on github.com">
+            <RepoForkedIcon /> Fork <span className="count">{compact(repo.forks_count)}</span>
+          </a>
           <StarButton repo={repo} />
         </div>
       </div>
@@ -113,15 +121,6 @@ export function RepoLayout() {
           forked from <Link to={`/${repo.parent.full_name}`}>{repo.parent.full_name}</Link>
         </div>
       )}
-      <nav className="tabs">
-        {tabs.map((t) => (
-          <Link key={t.label} to={t.to} className={`tab ${t.on.includes(section) ? 'active' : ''}`}>
-            {t.icon}
-            {t.label}
-            {!!t.count && <span className="count">{compact(t.count)}</span>}
-          </Link>
-        ))}
-      </nav>
       <Outlet context={{ repo }} />
     </div>
   );
@@ -236,7 +235,138 @@ function CloneMenu({ repo }: { repo: any }) {
   );
 }
 
-function LatestCommit({ repo, gitRef, path }: { repo: any; gitRef: string; path: string }) {
+/** Fuzzy file jump over the whole tree (press T on a code page). */
+function FileFinder({ repo, gitRef, onClose }: { repo: any; gitRef: string; onClose: () => void }) {
+  const navigate = useNavigate();
+  const tree = useGh<any>(`/repos/${repo.full_name}/git/trees/${encodeURIComponent(gitRef)}?recursive=1`);
+  const [text, setText] = useState('');
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const files = useMemo<string[]>(
+    () => (tree.data?.tree ?? []).filter((t: any) => t.type === 'blob').map((t: any) => t.path),
+    [tree.data],
+  );
+  const shown = useMemo(() => {
+    const q = text.trim().toLowerCase();
+    if (!q) return files.slice(0, 60);
+    const scored: [number, string][] = [];
+    for (const f of files) {
+      const lower = f.toLowerCase();
+      const base = lower.slice(lower.lastIndexOf('/') + 1);
+      let score = -1;
+      if (base.startsWith(q)) score = 0;
+      else if (base.includes(q)) score = 1;
+      else if (lower.includes(q)) score = 2;
+      else {
+        // subsequence match: every typed character appears in order
+        let i = 0;
+        for (const ch of lower) if (ch === q[i]) i++;
+        if (i === q.length) score = 3;
+      }
+      if (score >= 0) scored.push([score * 1000 + f.length, f]);
+    }
+    return scored.sort((a, b) => a[0] - b[0]).slice(0, 60).map(([, f]) => f);
+  }, [files, text]);
+
+  useEffect(() => setActive(0), [text]);
+  useEffect(() => {
+    listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
+  const open = (f?: string) => {
+    if (!f) return;
+    onClose();
+    navigate(`/${repo.full_name}/blob/${gitRef}/${f}`);
+  };
+
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <div className="palette" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="palette-input">
+          <SearchIcon />
+          <input
+            autoFocus
+            value={text}
+            placeholder={`Go to file in ${repo.name}`}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') onClose();
+              else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActive((i) => Math.min(i + 1, shown.length - 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActive((i) => Math.max(i - 1, 0));
+              } else if (e.key === 'Enter') open(shown[active]);
+            }}
+          />
+        </div>
+        <div className="palette-list" ref={listRef}>
+          {tree.isLoading && <Loading />}
+          {tree.error && <ErrorBox error={tree.error} />}
+          {tree.data?.truncated && !text && <p className="muted small pad">Large repository: only part of the tree is searchable.</p>}
+          {shown.map((f, i) => {
+            const cut = f.lastIndexOf('/') + 1;
+            return (
+              <button key={f} className={i === active ? 'active' : ''} onMouseEnter={() => setActive(i)} onClick={() => open(f)}>
+                <FileIcon />
+                <span className="palette-label">
+                  <span className="muted">{f.slice(0, cut)}</span>
+                  {f.slice(cut)}
+                </span>
+              </button>
+            );
+          })}
+          {!tree.isLoading && !tree.error && shown.length === 0 && <p className="muted pad">No matching files.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface FileCommit {
+  messageHeadline: string;
+  committedDate: string;
+  oid: string;
+}
+
+/**
+ * Last commit per directory entry. REST has no bulk endpoint for this, so it is one
+ * GraphQL request per 40 entries with an aliased `history(path:)` for each.
+ */
+function useTreeCommits(repo: any, ref: string, paths: string[]) {
+  const limited = paths.slice(0, 120);
+  return useQuery<Record<string, FileCommit>>({
+    queryKey: ['tree-commits', repo.full_name, ref, limited.join('\n')],
+    enabled: limited.length > 0,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const chunks: string[][] = [];
+      for (let i = 0; i < limited.length; i += 40) chunks.push(limited.slice(i, i + 40));
+      const out: Record<string, FileCommit> = {};
+      await Promise.all(
+        chunks.map(async (chunk) => {
+          const fields = chunk
+            .map((p, i) => `f${i}: history(first: 1, path: ${JSON.stringify(p)}) { nodes { messageHeadline committedDate oid } }`)
+            .join('\n');
+          const data = await gql<any>(
+            `query($owner: String!, $name: String!, $expr: String!) {
+              repository(owner: $owner, name: $name) { object(expression: $expr) { ... on Commit { ${fields} } } }
+            }`,
+            { owner: repo.owner.login, name: repo.name, expr: ref },
+          );
+          const obj = data.repository?.object ?? {};
+          chunk.forEach((p, i) => {
+            const node = obj[`f${i}`]?.nodes?.[0];
+            if (node) out[p] = node;
+          });
+        }),
+      );
+      return out;
+    },
+  });
+}
+
+function LatestCommit({ repo, gitRef, path, total }: { repo: any; gitRef: string; path: string; total?: number }) {
   const q = useGh<any[]>(
     `/repos/${repo.full_name}/commits?sha=${encodeURIComponent(gitRef)}&per_page=1${path ? `&path=${encodeURIComponent(path)}` : ''}`,
   );
@@ -245,7 +375,7 @@ function LatestCommit({ repo, gitRef, path }: { repo: any; gitRef: string; path:
     <div className="latest-commit">
       {c ? (
         <>
-          <Avatar user={c.author ?? {}} size={20} />
+          <Avatar user={c.author ?? {}} size={22} />
           <strong>{c.author?.login ?? c.commit.author.name}</strong>
           <Link to={`/${repo.full_name}/commit/${c.sha}`} className="commit-msg">
             {c.commit.message.split('\n')[0]}
@@ -260,55 +390,76 @@ function LatestCommit({ repo, gitRef, path }: { repo: any; gitRef: string; path:
         <span className="spacer" />
       )}
       <Link to={`/${repo.full_name}/commits/${gitRef}${path ? '/' + path : ''}`} className="history-link">
-        <HistoryIcon /> History
+        <HistoryIcon /> {total ? <strong>{total.toLocaleString()}</strong> : null} {total ? 'commits' : 'History'}
       </Link>
     </div>
   );
 }
 
-function About({ repo }: { repo: any }) {
+function About({ repo, counts }: { repo: any; counts: any }) {
   const langs = useGh<Record<string, number>>(`/repos/${repo.full_name}/languages`);
   const entries = Object.entries(langs.data ?? {});
   const total = entries.reduce((s, [, n]) => s + n, 0);
+  const latest = counts?.latestRelease;
   return (
     <aside className="about">
-      <h3>About</h3>
-      <p className={repo.description ? '' : 'muted'}>{repo.description ?? 'No description provided.'}</p>
-      {repo.homepage && (
-        <a className="about-link" href={repo.homepage}>
-          <LinkIcon size={14} /> {repo.homepage.replace(/^https?:\/\//, '')}
-        </a>
-      )}
-      {repo.topics?.length > 0 && (
-        <div className="topics">
-          {repo.topics.map((t: string) => (
-            <Link key={t} className="topic" to={`/search?q=${encodeURIComponent('topic:' + t)}`}>
-              {t}
-            </Link>
-          ))}
-        </div>
-      )}
-      <ul className="about-facts">
-        <li>
-          <BookIcon size={14} /> Readme
-        </li>
-        {repo.license && (
-          <li>
-            <LawIcon size={14} /> {repo.license.spdx_id !== 'NOASSERTION' ? repo.license.spdx_id : repo.license.name}
-          </li>
+      <section className="card pad-card">
+        <h3>About</h3>
+        <p className={repo.description ? '' : 'muted'}>{repo.description ?? 'No description provided.'}</p>
+        {repo.homepage && (
+          <a className="about-link" href={repo.homepage}>
+            <LinkIcon size={14} /> {repo.homepage.replace(/^https?:\/\//, '')}
+          </a>
         )}
-        <li>
-          <StarIcon size={14} /> <strong>{compact(repo.stargazers_count)}</strong> stars
-        </li>
-        <li>
-          <EyeIcon size={14} /> <strong>{compact(repo.subscribers_count)}</strong> watching
-        </li>
-        <li>
-          <RepoForkedIcon size={14} /> <strong>{compact(repo.forks_count)}</strong> forks
-        </li>
-      </ul>
+        {repo.topics?.length > 0 && (
+          <div className="topics">
+            {repo.topics.map((t: string) => (
+              <Link key={t} className="topic" to={`/search?q=${encodeURIComponent('topic:' + t)}`}>
+                {t}
+              </Link>
+            ))}
+          </div>
+        )}
+        <ul className="about-facts">
+          {repo.license && (
+            <li>
+              <LawIcon size={14} /> {repo.license.spdx_id !== 'NOASSERTION' ? repo.license.spdx_id : repo.license.name} license
+            </li>
+          )}
+          <li>
+            <StarIcon size={14} /> <strong>{compact(repo.stargazers_count)}</strong> stars
+          </li>
+          <li>
+            <RepoForkedIcon size={14} /> <strong>{compact(repo.forks_count)}</strong> forks
+          </li>
+          <li>
+            <EyeIcon size={14} /> <strong>{compact(repo.subscribers_count)}</strong> watching
+          </li>
+        </ul>
+      </section>
+      {counts?.releases.totalCount > 0 && (
+        <section className="card pad-card">
+          <h3>
+            Releases <span className="count">{counts.releases.totalCount}</span>
+          </h3>
+          {latest && (
+            <Link to={`/${repo.full_name}/releases`} className="release-latest">
+              <TagIcon size={14} />
+              <span>
+                <strong>{latest.name || latest.tagName}</strong> <span className="badge ok">Latest</span>
+                <span className="muted small">
+                  <Time iso={latest.publishedAt} />
+                </span>
+              </span>
+            </Link>
+          )}
+          <Link className="small muted" to={`/${repo.full_name}/releases`}>
+            All releases →
+          </Link>
+        </section>
+      )}
       {total > 0 && (
-        <>
+        <section className="card pad-card">
           <h3>Languages</h3>
           <div className="lang-bar">
             {entries.map(([name, n], i) => (
@@ -323,7 +474,7 @@ function About({ repo }: { repo: any }) {
               </span>
             ))}
           </div>
-        </>
+        </section>
       )}
     </aside>
   );
@@ -332,6 +483,7 @@ function About({ repo }: { repo: any }) {
 export function Code() {
   const { repo } = useRepo();
   const { ref, path } = useRefPath(repo);
+  const [finder, setFinder] = useState(false);
   const api = `/repos/${repo.full_name}`;
   const refQ = `?ref=${encodeURIComponent(ref)}`;
   const contents = useGh<any>(`${api}/contents/${encPath(path)}${refQ}`);
@@ -339,55 +491,107 @@ export function Code() {
     accept: ACCEPT.html,
     text: true,
   });
+  const counts = useRepoCounts(repo.owner.login, repo.name).data?.repository;
+  const entries = useMemo(
+    () =>
+      Array.isArray(contents.data)
+        ? [...contents.data].sort((a, b) => Number(b.type === 'dir') - Number(a.type === 'dir') || a.name.localeCompare(b.name))
+        : [],
+    [contents.data],
+  );
+  const commits = useTreeCommits(repo, ref, useMemo(() => entries.map((e) => e.path), [entries])).data ?? {};
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement).tagName);
+      if (e.key === 't' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        setFinder(true);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   if (contents.data && !Array.isArray(contents.data))
     return <Navigate replace to={`/${repo.full_name}/blob/${ref}/${path}`} />;
 
-  const entries = [...(contents.data ?? [])].sort(
-    (a, b) => Number(b.type === 'dir') - Number(a.type === 'dir') || a.name.localeCompare(b.name),
-  );
   const parent = path.split('/').slice(0, -1).join('/');
+  const onDefault = ref === repo.default_branch;
 
   return (
     <div className={`code-layout ${path ? 'no-side' : ''}`}>
       <div className="code-main">
-        <div className="toolbar">
-          <BranchPicker repo={repo} current={ref} kind="tree" path={path} />
-          <PathCrumbs repo={repo} gitRef={ref} path={path} />
-          <span className="spacer" />
-          <CloneMenu repo={repo} />
-        </div>
         <div className="card files">
-          <LatestCommit repo={repo} gitRef={ref} path={path} />
+          <div className="files-bar">
+            <BranchPicker repo={repo} current={ref} kind="tree" path={path} />
+            {path ? (
+              <PathCrumbs repo={repo} gitRef={ref} path={path} />
+            ) : (
+              counts && (
+                <>
+                  <span className="meta-item muted">
+                    <GitBranchIcon size={14} /> <strong>{counts.branches.totalCount}</strong> branches
+                  </span>
+                  <span className="meta-item muted">
+                    <TagIcon size={14} /> <strong>{counts.tags.totalCount}</strong> tags
+                  </span>
+                </>
+              )
+            )}
+            <span className="spacer" />
+            <button className="btn" onClick={() => setFinder(true)} title="Go to file (T)">
+              <SearchIcon /> Go to file
+            </button>
+            <CloneMenu repo={repo} />
+          </div>
+          <LatestCommit
+            repo={repo}
+            gitRef={ref}
+            path={path}
+            total={!path && onDefault ? counts?.defaultBranchRef?.target?.history?.totalCount : undefined}
+          />
           {contents.isLoading && <Loading />}
           {contents.error &&
             (contents.error.status === 404 && !path ? (
               <p className="muted pad">This repository is empty.</p>
             ) : (
-              <ErrorBox error={contents.error} />
+              <ErrorBox error={contents.error} retry={contents.refetch} />
             ))}
           {path && (
             <Link className="file-row" to={`/${repo.full_name}/tree/${ref}${parent ? '/' + parent : ''}`}>
-              <FileDirectoryFillIcon className="dir-icon" /> ..
+              <span className="file-name">
+                <FileDirectoryFillIcon className="dir-icon" /> ..
+              </span>
             </Link>
           )}
-          {entries.map((f) => (
-            <Link
-              key={f.path}
-              className="file-row"
-              to={`/${repo.full_name}/${f.type === 'dir' ? 'tree' : 'blob'}/${ref}/${f.path}`}
-            >
-              {f.type === 'dir' ? (
-                <FileDirectoryFillIcon className="dir-icon" />
-              ) : f.type === 'submodule' ? (
-                <FileSubmoduleIcon />
-              ) : (
-                <FileIcon />
-              )}
-              <span className="file-name">{f.name}</span>
-              {f.type === 'file' && <span className="muted small">{formatBytes(f.size)}</span>}
-            </Link>
-          ))}
+          {entries.map((f) => {
+            const c = commits[f.path];
+            return (
+              <div key={f.path} className="file-row">
+                <Link className="file-name" to={`/${repo.full_name}/${f.type === 'dir' ? 'tree' : 'blob'}/${ref}/${f.path}`}>
+                  {f.type === 'dir' ? (
+                    <FileDirectoryFillIcon className="dir-icon" />
+                  ) : f.type === 'submodule' ? (
+                    <FileSubmoduleIcon />
+                  ) : (
+                    <FileIcon />
+                  )}
+                  <span>{f.name}</span>
+                </Link>
+                {c ? (
+                  <Link className="file-commit" to={`/${repo.full_name}/commit/${c.oid}`}>
+                    {c.messageHeadline}
+                  </Link>
+                ) : (
+                  <span className="file-commit" />
+                )}
+                <span className="file-age" title={c ? new Date(c.committedDate).toLocaleString() : undefined}>
+                  {c ? shortAgo(c.committedDate) : ''}
+                </span>
+              </div>
+            );
+          })}
         </div>
         {readme.data && (
           <div className="card readme">
@@ -400,7 +604,8 @@ export function Code() {
           </div>
         )}
       </div>
-      {!path && <About repo={repo} />}
+      {!path && <About repo={repo} counts={counts} />}
+      {finder && <FileFinder repo={repo} gitRef={ref} onClose={() => setFinder(false)} />}
     </div>
   );
 }
@@ -415,7 +620,7 @@ function decodeBase64(b64: string): { text: string; binary: boolean } {
 
 function highlight(code: string, filename: string): string {
   const ext = filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : filename.toLowerCase();
-  if (code.length < 400_000 && hljs.getLanguage(ext)) {
+  if (code.length < 200_000 && hljs.getLanguage(ext)) {
     try {
       return hljs.highlight(code, { language: ext, ignoreIllegals: true }).value;
     } catch {
