@@ -2,28 +2,31 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   BellIcon,
-  CodeIcon,
+  CodeReviewIcon,
+  FileIcon,
+  GitCommitIcon,
   GitPullRequestIcon,
-  HistoryIcon,
   HomeIcon,
+  InboxIcon,
   IssueOpenedIcon,
   LinkExternalIcon,
+  MentionIcon,
   PersonIcon,
   PlayIcon,
+  PlusIcon,
   RepoIcon,
   SearchIcon,
-  StarIcon,
+  SidebarCollapseIcon,
   SyncIcon,
-  TagIcon,
+  XIcon,
 } from '@primer/octicons-react';
 import { useIsFetching } from '@tanstack/react-query';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { queryClient, useGh } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { type RepoRef, useRepoList } from '../lib/store';
-import { compact, openExternal, routeFromUrl } from '../lib/util';
-import { useRepoCounts } from '../pages/Repo';
+import { activateTab, closeTab, openTab, type RepoRef, syncActivePath, useRepoList, useTabs } from '../lib/store';
+import { openExternal, routeFromUrl } from '../lib/util';
 import { Avatar, Dropdown } from './ui';
 
 /** Theme-aware mark: solid tile in the text colour, glyph knocked out in the background colour. */
@@ -47,141 +50,195 @@ function applyTheme(t: Theme) {
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
 }
-function storedTheme(): Theme {
+function stored(key: string, fallback: string): string {
   try {
-    return (localStorage.getItem('theme') as Theme) || 'system';
+    return localStorage.getItem(key) || fallback;
   } catch {
-    return 'system';
+    return fallback;
   }
 }
-applyTheme(storedTheme());
+function store(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* storage unavailable */
+  }
+}
+applyTheme(stored('theme', 'system') as Theme);
 
-const PAGE_TITLES: Record<string, string> = {
-  notifications: 'Notifications',
-  pulls: 'Pull requests',
-  issues: 'Issues',
-  search: 'Search',
-};
+const TOP_PAGES: Record<string, string> = { notifications: 'Inbox', pulls: 'Pull requests', issues: 'Issues', search: 'Search' };
 
-function Crumbs() {
-  const seg = useLocation().pathname.split('/').filter(Boolean);
-  if (seg.length === 0) return <span className="crumb current">Home</span>;
-  if (seg.length === 1 && PAGE_TITLES[seg[0]]) return <span className="crumb current">{PAGE_TITLES[seg[0]]}</span>;
-  return (
-    <>
-      <Link className={`crumb ${seg.length === 1 ? 'current' : ''}`} to={`/${seg[0]}`}>
-        {seg[0]}
-      </Link>
-      {seg[1] && (
-        <>
-          <span className="crumb-sep">/</span>
-          <Link className="crumb current" to={`/${seg[0]}/${seg[1]}`}>
-            {seg[1]}
-          </Link>
-        </>
-      )}
-    </>
-  );
+/** Short label + icon for a tab, derived from its route alone so it never needs a fetch. */
+function describeTab(path: string): { title: string; icon: ReactNode } {
+  const [pathname, search = ''] = path.split('?');
+  const seg = pathname.split('/').filter(Boolean);
+  if (seg.length === 0) return { title: 'Home', icon: <HomeIcon size={14} /> };
+  if (seg.length === 1 && TOP_PAGES[seg[0]]) {
+    const q = new URLSearchParams(search).get('q');
+    const icon = {
+      notifications: <InboxIcon size={14} />,
+      pulls: <GitPullRequestIcon size={14} />,
+      issues: <IssueOpenedIcon size={14} />,
+      search: <SearchIcon size={14} />,
+    }[seg[0]];
+    return { title: seg[0] === 'search' && q ? q : TOP_PAGES[seg[0]], icon };
+  }
+  if (seg.length === 1) return { title: seg[0], icon: <PersonIcon size={14} /> };
+  const [, repo, section, ...rest] = seg;
+  switch (section) {
+    case 'issues':
+      return { title: rest[0] ? `${repo} #${rest[0]}` : `${repo} issues`, icon: <IssueOpenedIcon size={14} /> };
+    case 'pull':
+    case 'pulls':
+      return { title: rest[0] ? `${repo} #${rest[0]}` : `${repo} pulls`, icon: <GitPullRequestIcon size={14} /> };
+    case 'blob':
+      return { title: rest.at(-1) ?? repo, icon: <FileIcon size={14} /> };
+    case 'commit':
+      return { title: `${repo} ${(rest[0] ?? '').slice(0, 7)}`, icon: <GitCommitIcon size={14} /> };
+    case 'commits':
+      return { title: `${repo} commits`, icon: <GitCommitIcon size={14} /> };
+    case 'actions':
+      return { title: `${repo} actions`, icon: <PlayIcon size={14} /> };
+    default:
+      return { title: `${seg[0]}/${repo}`, icon: <RepoIcon size={14} /> };
+  }
 }
 
 export function Shell() {
   const navigate = useNavigate();
   const loc = useLocation();
   const navType = useNavigationType();
+  const { tabs, active } = useTabs();
   const [palette, setPalette] = useState(false);
-  const [theme, setTheme] = useState<Theme>(storedTheme);
+  const [sidebar, setSidebar] = useState(() => stored('sidebar', 'open') === 'open');
+  const [theme, setTheme] = useState<Theme>(() => stored('theme', 'system') as Theme);
   const fetching = useIsFetching() > 0;
-  const unread = useGh<any[]>('/notifications?per_page=1', { refetchInterval: 60_000 });
+  const here = loc.pathname + loc.search;
 
-  // New navigations start at the top; back/forward keep the browser's restored position.
+  // New navigations start at the top; back/forward keep the restored position.
   useEffect(() => {
+    syncActivePath(here);
     if (navType !== 'POP') window.scrollTo(0, 0);
     setPalette(false);
-  }, [loc.pathname, loc.search, navType]);
+  }, [here, navType]);
+
+  const newTab = (path = '/') => {
+    openTab(path, true);
+    navigate(path);
+  };
+  const close = (id: string) => {
+    const next = closeTab(id);
+    if (next !== null) navigate(next);
+  };
+  const toggleSidebar = () =>
+    setSidebar((v) => {
+      store('sidebar', v ? 'closed' : 'open');
+      return !v;
+    });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement).tagName);
-      if ((mod && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing)) {
-        e.preventDefault();
-        setPalette(true);
-      } else if (e.altKey && e.key === 'ArrowLeft') {
-        e.preventDefault();
-        navigate(-1);
-      } else if (e.altKey && e.key === 'ArrowRight') {
-        e.preventDefault();
-        navigate(1);
-      } else if ((mod && e.key.toLowerCase() === 'r') || e.key === 'F5') {
-        e.preventDefault();
-        void queryClient.invalidateQueries();
-      }
+      if ((mod && key === 'k') || (e.key === '/' && !typing)) setPalette(true);
+      else if (e.altKey && e.key === 'ArrowLeft') navigate(-1);
+      else if (e.altKey && e.key === 'ArrowRight') navigate(1);
+      else if ((mod && key === 'r') || e.key === 'F5') void queryClient.invalidateQueries();
+      else if (mod && key === 't') newTab();
+      else if (mod && key === 'w') close(active);
+      else if (mod && key === 'b') toggleSidebar();
+      else return;
+      e.preventDefault();
     };
-    // Markdown and API-provided links: route github.com URLs in-app, the rest to the system browser.
+    // One handler for every link: modifier/middle click opens a background tab, github.com
+    // URLs inside rendered Markdown are routed in-app, everything else goes to the browser.
     const onClick = (e: MouseEvent) => {
-      if (e.defaultPrevented || e.button !== 0) return;
       const a = (e.target as Element).closest?.('a');
       const href = a?.getAttribute('href');
-      if (!href || href.startsWith('#/')) return;
+      if (!a || !href) return;
+      const newTabClick = e.button === 1 || (e.button === 0 && (e.ctrlKey || e.metaKey));
+      const internal = href.startsWith('#/') ? href.slice(1) : a.hasAttribute('data-external') ? null : routeFromUrl(href);
+      if (newTabClick) {
+        e.preventDefault();
+        if (internal) openTab(internal, false);
+        else if (/^https?:/.test(href)) openExternal(href);
+        return;
+      }
+      if (e.defaultPrevented || e.button !== 0 || href.startsWith('#/')) return;
       e.preventDefault();
       if (href.startsWith('#')) {
         const id = decodeURIComponent(href.slice(1));
-        (document.getElementById('user-content-' + id) ?? document.getElementById(id))?.scrollIntoView({
-          behavior: 'smooth',
-        });
-        return;
-      }
-      const route = a!.hasAttribute('data-external') ? null : routeFromUrl(href);
-      if (route) navigate(route);
+        (document.getElementById('user-content-' + id) ?? document.getElementById(id))?.scrollIntoView({ behavior: 'smooth' });
+      } else if (internal) navigate(internal);
       else if (/^(https?|mailto):/.test(href)) openExternal(href);
     };
     document.addEventListener('keydown', onKey);
     document.addEventListener('click', onClick);
+    document.addEventListener('auxclick', onClick);
     return () => {
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('click', onClick);
+      document.removeEventListener('auxclick', onClick);
     };
-  }, [navigate]);
+  }, [navigate, active]);
 
   const cycleTheme = () => {
     const next: Theme = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
     setTheme(next);
     applyTheme(next);
-    try {
-      localStorage.setItem('theme', next);
-    } catch {
-      /* storage unavailable */
-    }
+    store('theme', next);
   };
 
-  const canGoBack = (window.history.state?.idx ?? 0) > 0;
-
   return (
-    <div className="app">
-      <Sidebar unread={!!unread.data?.length} theme={theme} cycleTheme={cycleTheme} />
-      <div className="content">
-        <header className="topbar">
-          <div className="nav-btns">
-            <button className="icon-btn" disabled={!canGoBack} onClick={() => navigate(-1)} title="Back (Alt+←)">
-              <ArrowLeftIcon />
-            </button>
-            <button className="icon-btn" onClick={() => navigate(1)} title="Forward (Alt+→)">
-              <ArrowRightIcon />
-            </button>
-          </div>
-          <div className="crumbs">
-            <Crumbs />
-          </div>
-          <button className="search-trigger" onClick={() => setPalette(true)}>
-            <SearchIcon size={14} />
-            <span>Search or jump to…</span>
-            <kbd>Ctrl K</kbd>
+    <div className={`app ${sidebar ? '' : 'no-sidebar'}`}>
+      {sidebar && <Sidebar here={here} theme={theme} cycleTheme={cycleTheme} openPalette={() => setPalette(true)} />}
+      <div className="workspace">
+        <header className="tabbar">
+          <button className="icon-btn" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)">
+            <SidebarCollapseIcon />
           </button>
-          <button
-            className={`icon-btn ${fetching ? 'spinning' : ''}`}
-            onClick={() => queryClient.invalidateQueries()}
-            title="Refresh (Ctrl+R)"
-          >
+          <button className="icon-btn" disabled={(window.history.state?.idx ?? 0) <= 0} onClick={() => navigate(-1)} title="Back (Alt+←)">
+            <ArrowLeftIcon />
+          </button>
+          <button className="icon-btn" onClick={() => navigate(1)} title="Forward (Alt+→)">
+            <ArrowRightIcon />
+          </button>
+          <div className="tabs-strip">
+            {tabs.map((t) => {
+              const d = describeTab(t.path);
+              return (
+                <div
+                  key={t.id}
+                  className={`wtab ${t.id === active ? 'active' : ''}`}
+                  title={t.path}
+                  onClick={() => {
+                    if (t.id === active) return;
+                    activateTab(t.id);
+                    navigate(t.path);
+                  }}
+                  onAuxClick={(e) => e.button === 1 && close(t.id)}
+                >
+                  {d.icon}
+                  <span>{d.title}</span>
+                  <button
+                    className="wtab-close"
+                    title="Close tab (Ctrl+W)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      close(t.id);
+                    }}
+                  >
+                    <XIcon size={12} />
+                  </button>
+                </div>
+              );
+            })}
+            <button className="icon-btn" onClick={() => newTab()} title="New tab (Ctrl+T)">
+              <PlusIcon />
+            </button>
+          </div>
+          <button className={`icon-btn ${fetching ? 'spinning' : ''}`} onClick={() => queryClient.invalidateQueries()} title="Refresh (Ctrl+R)">
             <SyncIcon />
           </button>
         </header>
@@ -194,9 +251,9 @@ export function Shell() {
   );
 }
 
-function SideLink({ to, icon, label, active, trailing }: { to: string; icon: ReactNode; label: string; active: boolean; trailing?: ReactNode }) {
+function SideLink({ to, icon, label, here, trailing }: { to: string; icon: ReactNode; label: string; here: string; trailing?: ReactNode }) {
   return (
-    <Link to={to} className={`side-link ${active ? 'active' : ''}`} title={label}>
+    <Link to={to} className={`side-link ${here === to ? 'active' : ''}`} title={label}>
       {icon}
       <span className="side-label">{label}</span>
       {trailing}
@@ -204,14 +261,19 @@ function SideLink({ to, icon, label, active, trailing }: { to: string; icon: Rea
   );
 }
 
-function RepoLinks({ title, repos, current }: { title: string; repos: RepoRef[]; current: string }) {
+function RepoLinks({ title, repos, here }: { title: string; repos: RepoRef[]; here: string }) {
   if (!repos.length) return null;
   return (
     <div className="side-group">
       <div className="side-heading">{title}</div>
       {repos.map((r) => (
-        <Link key={r.full_name} to={`/${r.full_name}`} title={r.full_name} className={`side-link ${current === r.full_name ? 'active' : ''}`}>
-          <img className="avatar square" src={`${r.avatar_url}${r.avatar_url.includes('?') ? '&' : '?'}s=40`} width={18} height={18} alt="" />
+        <Link
+          key={r.full_name}
+          to={`/${r.full_name}`}
+          title={r.full_name}
+          className={`side-link ${here === `/${r.full_name}` || here.startsWith(`/${r.full_name}/`) ? 'active' : ''}`}
+        >
+          <img className="avatar square" src={`${r.avatar_url}${r.avatar_url.includes('?') ? '&' : '?'}s=40`} width={16} height={16} alt="" />
           <span className="side-label">{r.full_name}</span>
         </Link>
       ))}
@@ -219,67 +281,56 @@ function RepoLinks({ title, repos, current }: { title: string; repos: RepoRef[];
   );
 }
 
-/** Section links for the repository being viewed; replaces GitHub's horizontal tab strip. */
-function RepoNav({ owner, name, section }: { owner: string; name: string; section: string }) {
-  const repo = useGh<any>(`/repos/${owner}/${name}`);
-  const counts = useRepoCounts(owner, name, repo.isSuccess).data?.repository;
-  if (!repo.data) return null;
-  const base = `/${repo.data.full_name}`;
-  const count = (n?: number) => (n ? <span className="side-count">{compact(n)}</span> : null);
-  return (
-    <div className="side-group">
-      <div className="side-heading">{repo.data.name}</div>
-      <SideLink to={base} icon={<CodeIcon />} label="Code" active={['', 'tree', 'blob'].includes(section)} />
-      {repo.data.has_issues && (
-        <SideLink to={`${base}/issues`} icon={<IssueOpenedIcon />} label="Issues" active={section === 'issues'} trailing={count(counts?.issues.totalCount)} />
-      )}
-      <SideLink to={`${base}/pulls`} icon={<GitPullRequestIcon />} label="Pull requests" active={section === 'pulls' || section === 'pull'} trailing={count(counts?.pullRequests.totalCount)} />
-      <SideLink to={`${base}/commits`} icon={<HistoryIcon />} label="Commits" active={section === 'commits' || section === 'commit'} />
-      <SideLink to={`${base}/actions`} icon={<PlayIcon />} label="Actions" active={section === 'actions'} />
-      <SideLink to={`${base}/releases`} icon={<TagIcon />} label="Releases" active={section === 'releases'} trailing={count(counts?.releases.totalCount)} />
-    </div>
-  );
-}
-
-function Sidebar({ unread, theme, cycleTheme }: { unread: boolean; theme: Theme; cycleTheme: () => void }) {
+/** Global navigation. Deliberately identical on every page: only the highlight moves. */
+function Sidebar({ here, theme, cycleTheme, openPalette }: { here: string; theme: Theme; cycleTheme: () => void; openPalette: () => void }) {
   const { viewer, source, signOut } = useAuth();
-  const loc = useLocation();
-  const seg = loc.pathname.split('/').filter(Boolean);
-  const inRepo = seg.length >= 2 && !PAGE_TITLES[seg[0]];
+  const unread = useGh<any[]>('/notifications?per_page=50', { refetchInterval: 60_000 });
   const favorites = useRepoList('favorites');
   const recents = useRepoList('recents').filter((r) => !favorites.some((f) => f.full_name === r.full_name));
-  const current = inRepo ? `${seg[0]}/${seg[1]}` : '';
-  const onStars = seg[0] === viewer.login && loc.search.includes('tab=stars');
+  const count = unread.data?.length ?? 0;
 
   return (
     <aside className="sidebar">
-      <Link to="/" className="brand" title="Home">
-        <Logo />
-        <span className="side-label">Gittern</span>
-      </Link>
-      <nav className="side-group">
-        <SideLink to="/" icon={<HomeIcon />} label="Home" active={seg.length === 0} />
+      <div className="side-brand">
+        <Logo size={20} />
+        <span>Gittern</span>
+      </div>
+      <div className="side-group">
+        <button className="side-link" onClick={openPalette}>
+          <SearchIcon />
+          <span className="side-label">Search</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+        <SideLink to="/" icon={<HomeIcon />} label="Home" here={here} />
         <SideLink
           to="/notifications"
-          icon={<BellIcon />}
-          label="Notifications"
-          active={seg[0] === 'notifications'}
-          trailing={unread ? <span className="unread-dot" /> : null}
+          icon={<InboxIcon />}
+          label="Inbox"
+          here={here}
+          trailing={count > 0 ? <span className="side-count">{count >= 50 ? '50+' : count}</span> : null}
         />
-        <SideLink to="/issues" icon={<IssueOpenedIcon />} label="Issues" active={seg.length === 1 && seg[0] === 'issues'} />
-        <SideLink to="/pulls" icon={<GitPullRequestIcon />} label="Pull requests" active={seg.length === 1 && seg[0] === 'pulls'} />
-        <SideLink to={`/${viewer.login}?tab=stars`} icon={<StarIcon />} label="Stars" active={onStars} />
-      </nav>
-      {inRepo && <RepoNav owner={seg[0]} name={seg[1]} section={seg[2] ?? ''} />}
-      <RepoLinks title="Favorites" repos={favorites} current={current} />
-      <RepoLinks title="Recent" repos={recents} current={current} />
+      </div>
+      <div className="side-group">
+        <div className="side-heading">Pull requests</div>
+        <SideLink to="/pulls" icon={<GitPullRequestIcon />} label="Created by me" here={here} />
+        <SideLink to="/pulls?filter=review-requested" icon={<CodeReviewIcon />} label="Needs my review" here={here} />
+        <SideLink to="/pulls?filter=mentions" icon={<MentionIcon />} label="Mentioned" here={here} />
+      </div>
+      <div className="side-group">
+        <div className="side-heading">Issues</div>
+        <SideLink to="/issues" icon={<IssueOpenedIcon />} label="Created by me" here={here} />
+        <SideLink to="/issues?filter=assignee" icon={<PersonIcon />} label="Assigned to me" here={here} />
+        <SideLink to="/issues?filter=mentions" icon={<MentionIcon />} label="Mentioned" here={here} />
+      </div>
+      <RepoLinks title="Pinned" repos={favorites} here={here} />
+      <RepoLinks title="Recent" repos={recents} here={here} />
       <span className="spacer" />
       <Dropdown
         className="side-link account"
         align="up"
         trigger={
           <>
-            <Avatar user={viewer} size={22} />
+            <Avatar user={viewer} size={20} />
             <span className="side-label">{viewer.login}</span>
           </>
         }
@@ -288,6 +339,8 @@ function Sidebar({ unread, theme, cycleTheme }: { unread: boolean; theme: Theme;
           <div className="menu" onClick={close}>
             <Link to={`/${viewer.login}`}>Your profile</Link>
             <Link to={`/${viewer.login}?tab=repositories`}>Your repositories</Link>
+            <Link to={`/${viewer.login}?tab=stars`}>Your stars</Link>
+            <hr />
             <button onClick={cycleTheme}>Theme: {theme}</button>
             <hr />
             {source === 'keyring' ? (
@@ -326,8 +379,7 @@ function Palette({ onClose }: { onClose: () => void }) {
 
   const mine = useGh<any[]>('/user/repos?sort=pushed&per_page=30&affiliation=owner,collaborator,organization_member');
   const found = useGh<any>(
-    debounced.length >= 2 && !debounced.includes('://') &&
-      `/search/repositories?q=${encodeURIComponent(debounced)}&per_page=6`,
+    debounced.length >= 2 && !debounced.includes('://') && `/search/repositories?q=${encodeURIComponent(debounced)}&per_page=6`,
   );
 
   const actions = useMemo<Action[]>(() => {
@@ -342,11 +394,9 @@ function Palette({ onClose }: { onClose: () => void }) {
     if (!q) {
       return [
         { key: 'home', icon: <HomeIcon />, label: 'Home', run: go('/') },
-        { key: 'notif', icon: <BellIcon />, label: 'Notifications', run: go('/notifications') },
-        { key: 'pulls', icon: <GitPullRequestIcon />, label: 'Your pull requests', run: go('/pulls') },
-        { key: 'issues', icon: <IssueOpenedIcon />, label: 'Your issues', run: go('/issues') },
+        { key: 'inbox', icon: <BellIcon />, label: 'Inbox', run: go('/notifications') },
         { key: 'me', icon: <PersonIcon />, label: 'Your profile', run: go(`/${viewer.login}`) },
-        ...(mine.data ?? []).slice(0, 6).map((r) => repoAction(r, 'Recent')),
+        ...(mine.data ?? []).slice(0, 8).map((r) => repoAction(r, 'Recent')),
       ];
     }
     const out: Action[] = [];
@@ -359,10 +409,8 @@ function Palette({ onClose }: { onClose: () => void }) {
       );
       return out;
     }
-    if (/^[\w.-]+\/[\w.-]+$/.test(q))
-      out.push({ key: 'jump', icon: <RepoIcon />, label: q, hint: 'Jump to repository', run: go(`/${q}`) });
-    else if (/^[\w-]+$/.test(q))
-      out.push({ key: 'user', icon: <PersonIcon />, label: q, hint: 'Jump to user or org', run: go(`/${q}`) });
+    if (/^[\w.-]+\/[\w.-]+$/.test(q)) out.push({ key: 'jump', icon: <RepoIcon />, label: q, hint: 'Jump to repository', run: go(`/${q}`) });
+    else if (/^[\w-]+$/.test(q)) out.push({ key: 'user', icon: <PersonIcon />, label: q, hint: 'Jump to user or org', run: go(`/${q}`) });
     const lower = q.toLowerCase();
     const seen = new Set<string>();
     for (const r of (mine.data ?? []).filter((r) => r.full_name.toLowerCase().includes(lower)).slice(0, 5)) {
@@ -370,12 +418,7 @@ function Palette({ onClose }: { onClose: () => void }) {
       out.push(repoAction(r, 'Yours'));
     }
     for (const r of found.data?.items ?? []) if (!seen.has(r.full_name)) out.push(repoAction(r, 'Repository'));
-    out.push({
-      key: 'search',
-      icon: <SearchIcon />,
-      label: `Search GitHub for “${q}”`,
-      run: go(`/search?q=${encodeURIComponent(q)}`),
-    });
+    out.push({ key: 'search', icon: <SearchIcon />, label: `Search GitHub for “${q}”`, run: go(`/search?q=${encodeURIComponent(q)}`) });
     return out;
   }, [q, mine.data, found.data, viewer.login, navigate]);
 
@@ -414,12 +457,7 @@ function Palette({ onClose }: { onClose: () => void }) {
         </div>
         <div className="palette-list" ref={listRef}>
           {actions.map((a, i) => (
-            <button
-              key={a.key}
-              className={i === active ? 'active' : ''}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => run(a)}
-            >
+            <button key={a.key} className={i === active ? 'active' : ''} onMouseEnter={() => setActive(i)} onClick={() => run(a)}>
               {a.icon}
               <span className="palette-label">{a.label}</span>
               {a.hint && <span className="palette-hint">{a.hint}</span>}

@@ -205,7 +205,7 @@ export function StatePill({ item }: { item: any }) {
 
 export function RepoRow({ repo, showOwner }: { repo: any; showOwner?: boolean }) {
   return (
-    <div className="row repo-row">
+    <div className="row">
       <div className="row-main">
         <div className="row-title">
           <Link to={`/${repo.full_name}`}>{showOwner ? repo.full_name : repo.name}</Link>
