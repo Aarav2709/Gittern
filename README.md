@@ -16,3 +16,5 @@ https://github.com/user-attachments/assets/11819e07-fb28-4fdb-83ae-c91e3573c0df
 
 Built with Tauri 2 (Rust) and React. It talks to the GitHub API directly; the token stays in the
 Rust process and is never exposed to the webview.
+
+> Usually like my other projects, AI is generally used for research and bug fixing, or maybe making my work easier. Just FYI, I can understand and comprehend, and also review what AI has done, before pushing anything.
