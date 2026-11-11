@@ -1,5 +1,9 @@
 import {
   BookIcon,
+  CommentDiscussionIcon,
+  GraphIcon,
+  ShieldIcon,
+  TableIcon,
   CheckIcon,
   CodeIcon,
   CopyIcon,
@@ -15,7 +19,6 @@ import {
   IssueOpenedIcon,
   LawIcon,
   LinkIcon,
-  PencilIcon,
   PinIcon,
   PlusIcon,
   PlayIcon,
@@ -24,22 +27,22 @@ import {
   StarFillIcon,
   StarIcon,
   TagIcon,
-  TrashIcon,
   TriangleDownIcon,
 } from '@primer/octicons-react';
 import { useQuery } from '@tanstack/react-query';
-import hljs from 'highlight.js/lib/common';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { Avatar, Dropdown, ErrorBox, Loading, Markdown, RepoGlyph, Segmented, Time } from '../components/ui';
-import { ACCEPT, gh, gql, invalidate, useGh, useGql } from '../lib/api';
+import { ACCEPT, gh, gql, invalidate, useGh, useGhAll, useGql } from '../lib/api';
+import { confirmDialog, toastError } from '../lib/feedback';
+import type { Repo } from '../lib/types';
 import { toggleFavorite, useRepoList, visitRepo } from '../lib/store';
-import { compact, copyText, encPath, formatBytes, timeAgo } from '../lib/util';
+import { compact, copyText, encPath, timeAgo } from '../lib/util';
 
-/** Monochrome ramp: the biggest language is the brightest segment. */
+// monochrome ramp
 const tone = (i: number) => `color-mix(in srgb, var(--fg) ${Math.max(14, 92 - i * 20)}%, transparent)`;
 
-export const useRepo = () => useOutletContext<{ repo: any; counts: any }>();
+export const useRepo = () => useOutletContext<{ repo: Repo; counts: any }>();
 
 const COUNTS_QUERY = `
 query($owner: String!, $name: String!) {
@@ -49,17 +52,18 @@ query($owner: String!, $name: String!) {
     branches: refs(refPrefix: "refs/heads/") { totalCount }
     tags: refs(refPrefix: "refs/tags/") { totalCount }
     releases { totalCount }
+    discussions { totalCount }
     latestRelease { tagName name publishedAt }
     defaultBranchRef { target { ... on Commit { history { totalCount } } } }
   }
 }`;
 
-/** Shared by the sidebar and the code page, so it is fetched once per repository. */
+// fetched once per repository
 export function useRepoCounts(owner: string | undefined, name: string | undefined, enabled = true) {
   return useGql<any>('repo-counts', COUNTS_QUERY, { owner, name }, enabled && !!owner && !!name);
 }
 
-function StarButton({ repo }: { repo: any }) {
+function StarButton({ repo }: { repo: Repo }) {
   const path = `/user/starred/${repo.full_name}`;
   const q = useGh(path);
   const [busy, setBusy] = useState(false);
@@ -80,18 +84,18 @@ function StarButton({ repo }: { repo: any }) {
   );
 }
 
-function ForkButton({ repo }: { repo: any }) {
+function ForkButton({ repo }: { repo: Repo }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const fork = async () => {
-    if (!window.confirm(`Fork ${repo.full_name} to your account?`)) return;
+    if (!(await confirmDialog({ title: `Fork ${repo.full_name}?`, body: 'A copy is created under your account.', confirmLabel: 'Fork' }))) return;
     setBusy(true);
     try {
       const created = await gh<any>(`/repos/${repo.full_name}/forks`, { method: 'POST' });
       await invalidate('/user/repos');
       navigate(`/${created.full_name}`);
     } catch (e) {
-      window.alert((e as Error).message);
+      toastError(e);
     } finally {
       setBusy(false);
     }
@@ -103,7 +107,7 @@ function ForkButton({ repo }: { repo: any }) {
   );
 }
 
-function WatchButton({ repo }: { repo: any }) {
+function WatchButton({ repo }: { repo: Repo }) {
   const path = `/repos/${repo.full_name}/subscription`;
   const q = useGh<any>(path);
   const watching = q.isSuccess && !!q.data?.subscribed;
@@ -141,13 +145,16 @@ export function RepoLayout() {
   const base = `/${repo.full_name}`;
   const pinned = favorites.some((f) => f.full_name === repo.full_name);
   const tabs = [
-    { to: base, label: 'Code', icon: <CodeIcon />, on: ['', 'tree', 'blob', 'edit', 'new'] },
+    { to: base, label: 'Code', icon: <CodeIcon />, on: ['', 'tree', 'blob', 'blame', 'edit', 'new', 'branches', 'search'] },
     ...(repo.has_issues ? [{ to: `${base}/issues`, label: 'Issues', icon: <IssueOpenedIcon />, on: ['issues'], count: counts?.issues.totalCount }] : []),
-    { to: `${base}/pulls`, label: 'Pull requests', icon: <GitPullRequestIcon />, on: ['pulls', 'pull', 'compare'], count: counts?.pullRequests.totalCount },
+    { to: `${base}/pulls`, label: 'Pull requests', icon: <GitPullRequestIcon />, on: ['pulls', 'pull', 'compare', 'labels', 'milestones', 'milestone'], count: counts?.pullRequests.totalCount },
+    ...(repo.has_discussions ? [{ to: `${base}/discussions`, label: 'Discussions', icon: <CommentDiscussionIcon />, on: ['discussions'], count: counts?.discussions?.totalCount }] : []),
     { to: `${base}/actions`, label: 'Actions', icon: <PlayIcon />, on: ['actions'] },
+    ...(repo.has_projects ? [{ to: `${base}/projects`, label: 'Projects', icon: <TableIcon />, on: ['projects'] }] : []),
     { to: `${base}/commits`, label: 'Commits', icon: <GitCommitIcon />, on: ['commits', 'commit'] },
-    { to: `${base}/branches`, label: 'Branches', icon: <GitBranchIcon />, on: ['branches'] },
-    { to: `${base}/releases`, label: 'Releases', icon: <TagIcon />, on: ['releases'] },
+    { to: `${base}/releases`, label: 'Releases', icon: <TagIcon />, on: ['releases', 'tags'] },
+    { to: `${base}/security`, label: 'Security', icon: <ShieldIcon />, on: ['security'] },
+    { to: `${base}/insights`, label: 'Insights', icon: <GraphIcon />, on: ['insights', 'forks', 'stargazers', 'watchers', 'deployments'] },
     ...(repo.permissions?.admin ? [{ to: `${base}/settings`, label: 'Settings', icon: <GearIcon />, on: ['settings'] }] : []),
   ];
 
@@ -182,9 +189,9 @@ export function RepoLayout() {
           forked from <Link to={`/${repo.parent.full_name}`}>{repo.parent.full_name}</Link>
         </div>
       )}
-      <nav className="tabs">
+      <nav className="tabs" aria-label="Repository">
         {tabs.map((t) => (
-          <Link key={t.label} to={t.to} className={`tab ${t.on.includes(section) ? 'active' : ''}`}>
+          <Link key={t.label} to={t.to} className={`tab ${t.on.includes(section) ? 'active' : ''}`} aria-current={t.on.includes(section) ? 'page' : undefined}>
             {t.icon}
             {t.label}
             {!!t.count && <span className="count">{compact(t.count)}</span>}
@@ -196,49 +203,67 @@ export function RepoLayout() {
   );
 }
 
-/** Splits the router splat into ref + path. Branch names containing "/" aren't resolved yet. */
-function useRefPath(repo: any) {
+// splits the route splat into ref + path
+export function useRefPath(repo: Repo) {
   const splat = useParams()['*'] ?? '';
-  const [ref, ...rest] = splat ? splat.split('/') : [repo.default_branch];
-  return { ref, path: rest.join('/') };
+  const [first, ...rest] = splat ? splat.split('/') : [repo.default_branch];
+  const simple = !rest.length || first === repo.default_branch || /^[0-9a-f]{40}$/.test(first);
+  const api = `/repos/${repo.full_name}/git/matching-refs`;
+  const heads = useGh<{ ref: string }[]>(!simple && `${api}/heads/${encodeURIComponent(first)}`, { staleTime: 5 * 60_000 });
+  const tags = useGh<{ ref: string }[]>(!simple && `${api}/tags/${encodeURIComponent(first)}`, { staleTime: 5 * 60_000 });
+  if (simple) return { ref: first, path: rest.join('/'), loading: false };
+  const names = [...(heads.data ?? []), ...(tags.data ?? [])].map((r) => r.ref.replace(/^refs\/(heads|tags)\//, ''));
+  const ref = names.filter((n) => splat === n || splat.startsWith(n + '/')).sort((a, b) => b.length - a.length)[0] ?? first;
+  return { ref, path: splat.slice(ref.length + 1), loading: heads.isLoading || tags.isLoading };
 }
 
-function BranchPicker({ repo, current, kind, path }: { repo: any; current: string; kind: string; path: string }) {
-  const [filter, setFilter] = useState('');
+export function BranchPicker({ repo, current, kind, path }: { repo: Repo; current: string; kind: string; path: string }) {
   return (
     <Dropdown
       trigger={
         <>
-          <GitBranchIcon /> {current} <TriangleDownIcon />
+          <GitBranchIcon /> {current.length === 40 && /^[0-9a-f]+$/.test(current) ? current.slice(0, 7) : current} <TriangleDownIcon />
         </>
       }
     >
-      {(close) => <BranchList repo={repo} current={current} kind={kind} path={path} filter={filter} setFilter={setFilter} close={close} />}
+      {(close) => <RefList repo={repo} current={current} kind={kind} path={path} close={close} />}
     </Dropdown>
   );
 }
 
-function BranchList({ repo, current, kind, path, filter, setFilter, close }: any) {
-  const branches = useGh<any[]>(`/repos/${repo.full_name}/branches?per_page=100`);
-  const shown = (branches.data ?? []).filter((b) => b.name.toLowerCase().includes(filter.toLowerCase()));
+function RefList({ repo, current, kind, path, close }: { repo: Repo; current: string; kind: string; path: string; close: () => void }) {
+  const [filter, setFilter] = useState('');
+  const [which, setWhich] = useState<'branches' | 'tags'>('branches');
+  const refs = useGhAll<{ name: string }>(`/repos/${repo.full_name}/${which}?per_page=100`);
+  const shown = refs.items.filter((b) => b.name.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div className="menu wide">
-      <input className="input" autoFocus placeholder="Find a branch…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      <input className="input" autoFocus placeholder={`Find a ${which === 'tags' ? 'tag' : 'branch'}…`} value={filter} onChange={(e) => setFilter(e.target.value)} />
+      <Segmented
+        value={which}
+        onChange={setWhich}
+        options={[
+          { value: 'branches', label: 'Branches' },
+          { value: 'tags', label: 'Tags' },
+        ]}
+      />
       <div className="menu-scroll" onClick={close}>
-        {branches.isLoading && <Loading />}
+        {refs.isLoading && <Loading />}
         {shown.map((b) => (
           <Link key={b.name} to={`/${repo.full_name}/${kind}/${b.name}${path ? '/' + path : ''}`}>
             <span className="check">{b.name === current && <CheckIcon size={14} />}</span>
             {b.name}
-            {b.name === repo.default_branch && <span className="badge">default</span>}
+            {b.name === repo.default_branch && which === 'branches' && <span className="badge">default</span>}
           </Link>
         ))}
+        {!refs.isLoading && shown.length === 0 && <p className="menu-note">Nothing matches.</p>}
+        {refs.truncated && <p className="menu-note">Showing the first {refs.items.length}.</p>}
       </div>
     </div>
   );
 }
 
-function PathCrumbs({ repo, gitRef, path }: { repo: any; gitRef: string; path: string }) {
+export function PathCrumbs({ repo, gitRef, path }: { repo: Repo; gitRef: string; path: string }) {
   const parts = path ? path.split('/') : [];
   const root = `/${repo.full_name}/tree/${gitRef}`;
   return (
@@ -260,7 +285,7 @@ function PathCrumbs({ repo, gitRef, path }: { repo: any; gitRef: string; path: s
   );
 }
 
-function CloneMenu({ repo }: { repo: any }) {
+function CloneMenu({ repo }: { repo: Repo }) {
   const [copied, setCopied] = useState('');
   const rows = [
     { label: 'HTTPS', value: repo.clone_url },
@@ -305,8 +330,8 @@ function CloneMenu({ repo }: { repo: any }) {
   );
 }
 
-/** Fuzzy file jump over the whole tree (press T on a code page). */
-function FileFinder({ repo, gitRef, onClose }: { repo: any; gitRef: string; onClose: () => void }) {
+// fuzzy file jump over the whole tree
+function FileFinder({ repo, gitRef, onClose }: { repo: Repo; gitRef: string; onClose: () => void }) {
   const navigate = useNavigate();
   const tree = useGh<any>(`/repos/${repo.full_name}/git/trees/${encodeURIComponent(gitRef)}?recursive=1`);
   const [text, setText] = useState('');
@@ -328,7 +353,7 @@ function FileFinder({ repo, gitRef, onClose }: { repo: any; gitRef: string; onCl
       else if (base.includes(q)) score = 1;
       else if (lower.includes(q)) score = 2;
       else {
-        // subsequence match: every typed character appears in order
+        // subsequence match
         let i = 0;
         for (const ch of lower) if (ch === q[i]) i++;
         if (i === q.length) score = 3;
@@ -399,12 +424,9 @@ interface FileCommit {
   oid: string;
 }
 
-/**
- * Last commit per directory entry. REST has no bulk endpoint for this, so it is one
- * GraphQL request per 40 entries with an aliased `history(path:)` for each.
- */
-function useTreeCommits(repo: any, ref: string, paths: string[]) {
-  const limited = paths.slice(0, 120);
+// last commit per entry
+function useTreeCommits(repo: Repo, ref: string, paths: string[]) {
+  const limited = paths.slice(0, 1000);
   return useQuery<Record<string, FileCommit>>({
     queryKey: ['tree-commits', repo.full_name, ref, limited.join('\n')],
     enabled: limited.length > 0,
@@ -436,7 +458,7 @@ function useTreeCommits(repo: any, ref: string, paths: string[]) {
   });
 }
 
-function LatestCommit({ repo, gitRef, path, total }: { repo: any; gitRef: string; path: string; total?: number }) {
+export function LatestCommit({ repo, gitRef, path, total }: { repo: Repo; gitRef: string; path: string; total?: number }) {
   const q = useGh<any[]>(
     `/repos/${repo.full_name}/commits?sha=${encodeURIComponent(gitRef)}&per_page=1${path ? `&path=${encodeURIComponent(path)}` : ''}`,
   );
@@ -466,8 +488,8 @@ function LatestCommit({ repo, gitRef, path, total }: { repo: any; gitRef: string
   );
 }
 
-/** Description, website and topics, editable in place by repository admins. */
-function AboutEdit({ repo, onDone }: { repo: any; onDone: () => void }) {
+// description, website and topics, editable by admins
+function AboutEdit({ repo, onDone }: { repo: Repo; onDone: () => void }) {
   const [description, setDescription] = useState<string>(repo.description ?? '');
   const [homepage, setHomepage] = useState<string>(repo.homepage ?? '');
   const [topics, setTopics] = useState<string>((repo.topics ?? []).join(' '));
@@ -516,14 +538,14 @@ function AboutEdit({ repo, onDone }: { repo: any; onDone: () => void }) {
   );
 }
 
-function About({ repo, counts }: { repo: any; counts: any }) {
+function About({ repo, counts }: { repo: Repo; counts: any }) {
   const api = `/repos/${repo.full_name}`;
   const langs = useGh<Record<string, number>>(`${api}/languages`);
   const contributors = useGh<any[]>(`${api}/contributors?per_page=14`);
   const [editing, setEditing] = useState(false);
   const all = Object.entries(langs.data ?? {});
   const total = all.reduce((sum, [, n]) => sum + n, 0);
-  // Languages under 0.1% only add noise to the bar and legend.
+  // tiny languages only add noise
   const entries = all.filter(([, n]) => n / total >= 0.001);
   const latest = counts?.latestRelease;
   return (
@@ -532,7 +554,7 @@ function About({ repo, counts }: { repo: any; counts: any }) {
         <div className="about-head">
           <h3>About</h3>
           {repo.permissions?.admin && !editing && (
-            <button className="icon-btn sm" title="Edit repository details" onClick={() => setEditing(true)}>
+            <button className="icon-btn sm" title="Edit repository details" aria-label="Edit repository details" onClick={() => setEditing(true)}>
               <GearIcon />
             </button>
           )}
@@ -547,7 +569,7 @@ function About({ repo, counts }: { repo: any; counts: any }) {
                 <LinkIcon /> <span>{repo.homepage.replace(/^https?:\/\//, '')}</span>
               </a>
             )}
-            {repo.topics?.length > 0 && (
+            {!!repo.topics?.length && (
               <div className="topics">
                 {repo.topics.map((t: string) => (
                   <Link key={t} className="topic" to={`/search?q=${encodeURIComponent('topic:' + t)}`}>
@@ -568,13 +590,22 @@ function About({ repo, counts }: { repo: any; counts: any }) {
             </li>
           )}
           <li>
-            <StarIcon /> <strong>{compact(repo.stargazers_count)}</strong> stars
+            <StarIcon />
+            <Link to={`/${repo.full_name}/stargazers`}>
+              <strong>{compact(repo.stargazers_count)}</strong> stars
+            </Link>
           </li>
           <li>
-            <EyeIcon /> <strong>{compact(repo.subscribers_count)}</strong> watching
+            <EyeIcon />
+            <Link to={`/${repo.full_name}/watchers`}>
+              <strong>{compact(repo.subscribers_count ?? 0)}</strong> watching
+            </Link>
           </li>
           <li>
-            <RepoForkedIcon /> <strong>{compact(repo.forks_count)}</strong> forks
+            <RepoForkedIcon />
+            <Link to={`/${repo.full_name}/forks`}>
+              <strong>{compact(repo.forks_count)}</strong> forks
+            </Link>
           </li>
         </ul>
       </section>
@@ -627,15 +658,15 @@ function About({ repo, counts }: { repo: any; counts: any }) {
   );
 }
 
-/** The Code tab, as on github.com: files and README on the left, About on the right. */
+// the code tab
 export function Code() {
   const { repo, counts } = useRepo();
-  const { ref, path } = useRefPath(repo);
+  const { ref, path, loading } = useRefPath(repo);
   const [finder, setFinder] = useState(false);
   const api = `/repos/${repo.full_name}`;
   const refQ = `?ref=${encodeURIComponent(ref)}`;
-  const contents = useGh<any>(`${api}/contents/${encPath(path)}${refQ}`);
-  const readme = useGh<string>(`${api}/readme${path ? '/' + encPath(path) : ''}${refQ}`, { accept: ACCEPT.html, text: true });
+  const contents = useGh<any>(!loading && `${api}/contents/${encPath(path)}${refQ}`);
+  const readme = useGh<string>(!loading && `${api}/readme${path ? '/' + encPath(path) : ''}${refQ}`, { accept: ACCEPT.html, text: true });
   const entries = useMemo(
     () =>
       Array.isArray(contents.data)
@@ -673,9 +704,9 @@ export function Code() {
                 <Link to={`/${repo.full_name}/branches`} className="meta-item muted">
                   <GitBranchIcon /> <strong>{counts.branches.totalCount}</strong> Branches
                 </Link>
-                <span className="meta-item muted">
+                <Link to={`/${repo.full_name}/tags`} className="meta-item muted">
                   <TagIcon /> <strong>{counts.tags.totalCount}</strong> Tags
-                </span>
+                </Link>
               </>
             )
           )}
@@ -745,151 +776,3 @@ export function Code() {
   );
 }
 
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|ico|bmp|avif)$/i;
-const MIME: Record<string, string> = { svg: 'image/svg+xml', jpg: 'image/jpeg', ico: 'image/x-icon' };
-
-function decodeBase64(b64: string): { text: string; binary: boolean } {
-  const bytes = Uint8Array.from(atob(b64.replace(/\s/g, '')), (c) => c.charCodeAt(0));
-  return { text: new TextDecoder().decode(bytes), binary: bytes.subarray(0, 8000).includes(0) };
-}
-
-function highlight(code: string, filename: string): string {
-  const ext = filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : filename.toLowerCase();
-  if (code.length < 200_000 && hljs.getLanguage(ext)) {
-    try {
-      return hljs.highlight(code, { language: ext, ignoreIllegals: true }).value;
-    } catch {
-      /* fall through to plain text */
-    }
-  }
-  return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-export function Blob() {
-  const { repo } = useRepo();
-  const { ref, path } = useRefPath(repo);
-  const api = `/repos/${repo.full_name}/contents/${encPath(path)}?ref=${encodeURIComponent(ref)}`;
-  const meta = useGh<any>(api);
-  const name = path.split('/').pop() ?? '';
-  const isImage = IMAGE_EXT.test(name);
-  const isMarkdown = /\.(md|markdown|mdx)$/i.test(name);
-  const navigate = useNavigate();
-  const [mode, setMode] = useState<'preview' | 'code'>('preview');
-  // The contents API omits inline content above 1 MB; fetch those raw.
-  const tooBig = !!meta.data && !Array.isArray(meta.data) && !meta.data.content && meta.data.size > 0;
-  const raw = useGh<string>(tooBig && !isImage && meta.data.size < 5_000_000 && api, { accept: ACCEPT.raw, text: true });
-  const rendered = useGh<string>(isMarkdown && mode === 'preview' && api, { accept: ACCEPT.html, text: true });
-
-  const decoded = useMemo(() => {
-    if (raw.data != null) return { text: raw.data, binary: false };
-    if (!meta.data?.content || isImage) return null;
-    try {
-      return decodeBase64(meta.data.content);
-    } catch {
-      return { text: '', binary: true };
-    }
-  }, [meta.data, raw.data, isImage]);
-  const html = useMemo(() => (decoded && !decoded.binary ? highlight(decoded.text, name) : ''), [decoded, name]);
-
-  if (meta.isLoading) return <Loading />;
-  if (meta.error) return <ErrorBox error={meta.error} />;
-  if (Array.isArray(meta.data)) return <Navigate replace to={`/${repo.full_name}/tree/${ref}/${path}`} />;
-  const file = meta.data;
-  const remove = async () => {
-    if (!window.confirm(`Delete ${path} from ${ref}? This commits directly to the branch.`)) return;
-    try {
-      await gh(`/repos/${repo.full_name}/contents/${encPath(path)}`, { method: 'DELETE', body: { message: `Delete ${name}`, sha: file.sha, branch: ref } });
-      await invalidate(`/repos/${repo.full_name}`);
-      navigate(`/${repo.full_name}/tree/${ref}${path.includes('/') ? '/' + path.slice(0, path.lastIndexOf('/')) : ''}`, { replace: true });
-    } catch (e) {
-      window.alert((e as Error).message);
-    }
-  };
-  const lines = decoded ? decoded.text.replace(/\n$/, '').split('\n').length : 0;
-  const ext = name.split('.').pop()!.toLowerCase();
-
-  let body;
-  if (isImage) {
-    body = (
-      <div className="blob-image">
-        {file.content ? (
-          <img src={`data:${MIME[ext] ?? `image/${ext}`};base64,${file.content.replace(/\s/g, '')}`} alt={name} />
-        ) : (
-          <img src={file.download_url} alt={name} />
-        )}
-      </div>
-    );
-  } else if (isMarkdown && mode === 'preview') {
-    body = rendered.isLoading ? <Loading /> : <div className="pad-lg"><Markdown html={rendered.data ?? ''} base={{ repo: repo.full_name, ref, dir: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '' }} /></div>;
-  } else if (raw.isLoading) {
-    body = <Loading />;
-  } else if (!decoded || decoded.binary) {
-    body = (
-      <p className="muted pad">
-        {decoded?.binary ? 'Binary file not shown.' : 'This file is too large to display.'}{' '}
-        <a href={file.download_url} data-external>
-          Download
-        </a>
-      </p>
-    );
-  } else {
-    body = (
-      <div className="blob-code">
-        <pre className="line-nums">{Array.from({ length: lines }, (_, i) => i + 1).join('\n')}</pre>
-        <pre className="code">
-          <code dangerouslySetInnerHTML={{ __html: html }} />
-        </pre>
-      </div>
-    );
-  }
-
-  return (
-    <div className="stack">
-      <div className="toolbar">
-        <BranchPicker repo={repo} current={ref} kind="blob" path={path} />
-        <PathCrumbs repo={repo} gitRef={ref} path={path} />
-      </div>
-      <div className="card">
-        <LatestCommit repo={repo} gitRef={ref} path={path} />
-      </div>
-      <div className="card blob">
-        <div className="card-head">
-          {isMarkdown && (
-            <Segmented
-              value={mode}
-              onChange={setMode}
-              options={[
-                { value: 'preview', label: 'Preview' },
-                { value: 'code', label: 'Code' },
-              ]}
-            />
-          )}
-          <span className="muted small">
-            {lines > 0 && `${lines} lines · `}
-            {formatBytes(file.size)}
-          </span>
-          <span className="spacer" />
-          {decoded && !decoded.binary && (
-            <button className="btn sm" onClick={() => void copyText(decoded.text)}>
-              <CopyIcon /> Copy
-            </button>
-          )}
-          {repo.permissions?.push && decoded && !decoded.binary && (
-            <Link className="btn sm" to={`/${repo.full_name}/edit/${ref}/${path}`}>
-              <PencilIcon /> Edit
-            </Link>
-          )}
-          {repo.permissions?.push && (
-            <button className="btn sm" onClick={remove}>
-              <TrashIcon /> Delete
-            </button>
-          )}
-          <a className="btn sm" href={file.html_url} data-external>
-            Open on GitHub
-          </a>
-        </div>
-        {body}
-      </div>
-    </div>
-  );
-}

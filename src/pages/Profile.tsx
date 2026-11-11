@@ -9,10 +9,12 @@ import {
 } from '@primer/octicons-react';
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ErrorBox, LangDot, Loading, LoadMore, Markdown, RepoGlyph, RepoRow } from '../components/ui';
+import { Avatar, ErrorBox, LangDot, ListState, Loading, LoadMore, Markdown, RepoGlyph, RepoRow, UserLink } from '../components/ui';
 import { ACCEPT, gh, invalidate, useGh, useGhPages, useGql } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import type { Repo, User } from '../lib/types';
 import { compact } from '../lib/util';
+import { GistList } from './Gists';
 
 const PROFILE_QUERY = `
 query($login: String!) {
@@ -128,11 +130,11 @@ function Overview({ login, isUser }: { login: string; isUser: boolean }) {
 
 function RepoList({ path }: { path: string }) {
   const [filter, setFilter] = useState('');
-  const q = useGhPages<any>(path);
+  const q = useGhPages<Repo>(path);
   const shown = q.items.filter((r) => r.full_name.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div className="stack">
-      <input className="input" placeholder="Filter loaded repositories…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      <input className="input" placeholder="Filter loaded repositories…" aria-label="Filter repositories" value={filter} onChange={(e) => setFilter(e.target.value)} />
       {q.isLoading && <Loading />}
       {q.error && <ErrorBox error={q.error} />}
       {!q.isLoading && shown.length === 0 && <p className="muted pad">No repositories to show.</p>}
@@ -177,52 +179,60 @@ function FollowButton({ login }: { login: string }) {
   );
 }
 
-const PROFILE_FIELDS: [string, string][] = [
-  ['name', 'Name'],
-  ['bio', 'Bio'],
-  ['company', 'Company'],
-  ['location', 'Location'],
-  ['blog', 'Website'],
-];
-
-function ProfileEdit({ user, onDone }: { user: any; onDone: () => void }) {
-  const [form, setForm] = useState<Record<string, string>>(() => Object.fromEntries(PROFILE_FIELDS.map(([k]) => [k, user[k] ?? ''])));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const save = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await gh('/user', { method: 'PATCH', body: form });
-      await Promise.all([invalidate(`/users/${user.login}`), invalidate('/user')]);
-      onDone();
-    } catch (e) {
-      const status = (e as { status?: number }).status;
-      setError(status === 403 || status === 404 ? 'Your token lacks the "user" scope needed to edit the profile.' : (e as Error).message);
-      setBusy(false);
-    }
-  };
+function UserList({ path, empty }: { path: string; empty: string }) {
+  const q = useGhPages<User>(path);
   return (
-    <div className="form">
-      {PROFILE_FIELDS.map(([key, label]) => (
-        <label key={key}>
-          {label}
-          {key === 'bio' ? (
-            <textarea className="input" rows={3} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
-          ) : (
-            <input className="input" value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
-          )}
-        </label>
-      ))}
-      {error && <span className="small">{error}</span>}
-      <div className="form-foot">
-        <button className="btn primary" disabled={busy} onClick={save}>
-          {busy ? 'Saving…' : 'Save'}
-        </button>
-        <button className="btn" onClick={onDone}>
-          Cancel
-        </button>
+    <div className="stack">
+      <ListState q={q} count={q.items.length} empty={empty} />
+      <div className="people-grid">
+        {q.items.map((u) => (
+          <div key={u.id} className="card person">
+            <Avatar user={u} size={36} />
+            <UserLink user={u} />
+          </div>
+        ))}
       </div>
+      <LoadMore q={q} />
+    </div>
+  );
+}
+
+function Teams({ org }: { org: string }) {
+  const q = useGhPages<{ id: number; name: string; slug: string; description: string | null; privacy: string; html_url: string }>(`/orgs/${org}/teams?per_page=50`);
+  return (
+    <div className="stack">
+      <div className="card">
+        <ListState q={q} count={q.items.length} empty="No teams you can see" />
+        {q.items.map((t) => (
+          <div key={t.id} className="row compact">
+            <span className="state-icon">
+              <PeopleIcon />
+            </span>
+            <div className="row-main">
+              <a className="row-link" href={t.html_url} data-external>
+                {t.name}
+              </a>
+              {t.description && <p className="row-desc">{t.description}</p>}
+            </div>
+            <span className="badge">{t.privacy}</span>
+          </div>
+        ))}
+      </div>
+      <LoadMore q={q} />
+    </div>
+  );
+}
+
+function Orgs({ login }: { login: string }) {
+  const q = useGh<User[]>(`/users/${login}/orgs?per_page=30`);
+  if (!q.data?.length) return null;
+  return (
+    <div className="faces">
+      {q.data.map((o) => (
+        <Link key={o.id} to={`/${o.login}`} title={o.login}>
+          <img className="avatar square" src={o.avatar_url} width={28} height={28} alt={o.login} />
+        </Link>
+      ))}
     </div>
   );
 }
@@ -231,18 +241,27 @@ export function Profile() {
   const { owner = '' } = useParams();
   const [sp, setSp] = useSearchParams();
   const tab = sp.get('tab') ?? 'overview';
-  const user = useGh<any>(`/users/${owner}`);
+  const user = useGh<User>(`/users/${owner}`);
   const { viewer } = useAuth();
-  const [editing, setEditing] = useState(false);
 
   if (user.isLoading) return <Loading />;
   if (user.error) return <ErrorBox error={user.error} />;
-  const u = user.data;
+  const u = user.data!;
   const isUser = u.type === 'User';
   const tabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'repositories', label: 'Repositories', count: u.public_repos },
-    ...(isUser ? [{ id: 'stars', label: 'Stars' }] : []),
+    ...(isUser
+      ? [
+          { id: 'stars', label: 'Stars' },
+          { id: 'gists', label: 'Gists', count: u.public_gists },
+          { id: 'followers', label: 'Followers', count: u.followers },
+          { id: 'following', label: 'Following', count: u.following },
+        ]
+      : [
+          { id: 'people', label: 'People' },
+          { id: 'teams', label: 'Teams' },
+        ]),
   ];
   const blog = u.blog && (/^https?:\/\//.test(u.blog) ? u.blog : `https://${u.blog}`);
 
@@ -255,13 +274,9 @@ export function Profile() {
         {u.bio && <p className="profile-bio">{u.bio}</p>}
         {u.description && <p className="profile-bio">{u.description}</p>}
         {u.login === viewer.login ? (
-          editing ? (
-            <ProfileEdit user={u} onDone={() => setEditing(false)} />
-          ) : (
-            <button className="btn block" onClick={() => setEditing(true)}>
-              Edit profile
-            </button>
-          )
+          <Link className="btn block" to="/settings?tab=profile">
+            Edit profile
+          </Link>
         ) : (
           <>
             {isUser && <FollowButton login={u.login} />}
@@ -275,7 +290,13 @@ export function Profile() {
             <li>
               <PeopleIcon size={14} />
               <span>
-                <strong>{compact(u.followers)}</strong> followers · <strong>{compact(u.following)}</strong> following
+                <Link to={`/${u.login}?tab=followers`}>
+                  <strong>{compact(u.followers ?? 0)}</strong> followers
+                </Link>{' '}
+                ·{' '}
+                <Link to={`/${u.login}?tab=following`}>
+                  <strong>{compact(u.following ?? 0)}</strong> following
+                </Link>
               </span>
             </li>
           )}
@@ -296,10 +317,11 @@ export function Profile() {
           )}
           {blog && (
             <li>
-              <LinkIcon size={14} /> <a href={blog}>{u.blog.replace(/^https?:\/\//, '')}</a>
+              <LinkIcon size={14} /> <a href={blog}>{u.blog!.replace(/^https?:\/\//, '')}</a>
             </li>
           )}
         </ul>
+        {isUser && <Orgs login={u.login} />}
       </aside>
       <section className="profile-main">
         <nav className="tabs">
@@ -310,7 +332,7 @@ export function Profile() {
               onClick={() => setSp(t.id === 'overview' ? {} : { tab: t.id })}
             >
               {t.label}
-              {'count' in t && t.count > 0 && <span className="count">{compact(t.count)}</span>}
+              {'count' in t && !!t.count && <span className="count">{compact(t.count)}</span>}
             </button>
           ))}
         </nav>
@@ -325,6 +347,11 @@ export function Profile() {
           />
         )}
         {tab === 'stars' && <RepoList path={`/users/${u.login}/starred?per_page=30`} />}
+        {tab === 'gists' && <GistList path={`/users/${u.login}/gists?per_page=30`} />}
+        {tab === 'followers' && <UserList path={`/users/${u.login}/followers?per_page=50`} empty="No followers yet" />}
+        {tab === 'following' && <UserList path={`/users/${u.login}/following?per_page=50`} empty="Not following anyone" />}
+        {tab === 'people' && <UserList path={`/orgs/${u.login}/members?per_page=50`} empty="No public members" />}
+        {tab === 'teams' && <Teams org={u.login} />}
       </section>
     </div></div>
   );
