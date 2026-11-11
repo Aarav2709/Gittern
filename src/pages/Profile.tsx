@@ -10,7 +10,7 @@ import {
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ErrorBox, LangDot, Loading, LoadMore, Markdown, RepoGlyph, RepoRow } from '../components/ui';
-import { ACCEPT, useGh, useGhPages, useGql } from '../lib/api';
+import { ACCEPT, gh, invalidate, useGh, useGhPages, useGql } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { compact } from '../lib/util';
 
@@ -148,12 +148,63 @@ function RepoList({ path }: { path: string }) {
   );
 }
 
+const PROFILE_FIELDS: [string, string][] = [
+  ['name', 'Name'],
+  ['bio', 'Bio'],
+  ['company', 'Company'],
+  ['location', 'Location'],
+  ['blog', 'Website'],
+];
+
+function ProfileEdit({ user, onDone }: { user: any; onDone: () => void }) {
+  const [form, setForm] = useState<Record<string, string>>(() => Object.fromEntries(PROFILE_FIELDS.map(([k]) => [k, user[k] ?? ''])));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await gh('/user', { method: 'PATCH', body: form });
+      await Promise.all([invalidate(`/users/${user.login}`), invalidate('/user')]);
+      onDone();
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      setError(status === 403 || status === 404 ? 'Your token lacks the "user" scope needed to edit the profile.' : (e as Error).message);
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="form">
+      {PROFILE_FIELDS.map(([key, label]) => (
+        <label key={key}>
+          {label}
+          {key === 'bio' ? (
+            <textarea className="input" rows={3} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
+          ) : (
+            <input className="input" value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
+          )}
+        </label>
+      ))}
+      {error && <span className="small">{error}</span>}
+      <div className="form-foot">
+        <button className="btn primary" disabled={busy} onClick={save}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        <button className="btn" onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Profile() {
   const { owner = '' } = useParams();
   const [sp, setSp] = useSearchParams();
   const tab = sp.get('tab') ?? 'overview';
   const user = useGh<any>(`/users/${owner}`);
   const { viewer } = useAuth();
+  const [editing, setEditing] = useState(false);
 
   if (user.isLoading) return <Loading />;
   if (user.error) return <ErrorBox error={user.error} />;
@@ -167,16 +218,26 @@ export function Profile() {
   const blog = u.blog && (/^https?:\/\//.test(u.blog) ? u.blog : `https://${u.blog}`);
 
   return (
-    <div className="page profile">
+    <div className="page"><div className="profile">
       <aside className="profile-side">
         <img className={`profile-avatar ${isUser ? '' : 'org'}`} src={u.avatar_url} alt="" />
         <h1>{u.name ?? u.login}</h1>
         {u.name && <div className="profile-login">{u.login}</div>}
         {u.bio && <p className="profile-bio">{u.bio}</p>}
         {u.description && <p className="profile-bio">{u.description}</p>}
-        <a className="btn block" href={u.html_url} data-external>
-          Open on github.com
-        </a>
+        {u.login === viewer.login ? (
+          editing ? (
+            <ProfileEdit user={u} onDone={() => setEditing(false)} />
+          ) : (
+            <button className="btn block" onClick={() => setEditing(true)}>
+              Edit profile
+            </button>
+          )
+        ) : (
+          <a className="btn block" href={u.html_url} data-external>
+            Open on GitHub
+          </a>
+        )}
         <ul className="profile-facts">
           {isUser && (
             <li>
@@ -233,6 +294,6 @@ export function Profile() {
         )}
         {tab === 'stars' && <RepoList path={`/users/${u.login}/starred?per_page=30`} />}
       </section>
-    </div>
+    </div></div>
   );
 }
