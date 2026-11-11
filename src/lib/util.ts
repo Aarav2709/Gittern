@@ -59,12 +59,12 @@ export async function copyText(text: string) {
   }
 }
 
-const REPO_SECTIONS = new Set(['tree', 'blob', 'issues', 'pulls', 'pull', 'commits', 'commit', 'actions', 'releases', 'branches']);
-const TOP_LEVEL = new Set(['notifications', 'pulls', 'issues', 'search']);
+const REPO_SECTIONS = new Set(['tree', 'blob', 'issues', 'pulls', 'pull', 'commits', 'commit', 'actions', 'releases', 'branches', 'compare', 'settings']);
+const TOP_LEVEL = new Set(['notifications', 'pulls', 'issues', 'search', 'new']);
 /** github.com first path segments that are site pages, not users/orgs. */
 const RESERVED = new Set([
   'settings', 'marketplace', 'sponsors', 'features', 'orgs', 'apps', 'topics', 'collections', 'trending',
-  'explore', 'login', 'logout', 'about', 'pricing', 'enterprise', 'security', 'site', 'contact', 'new',
+  'explore', 'login', 'logout', 'about', 'pricing', 'enterprise', 'security', 'site', 'contact',
   'codespaces', 'organizations', 'users', 'events', 'account', 'join', 'signup', 'customer-stories',
   'readme', 'team', 'solutions', 'resources', 'discussions', 'stars', 'watching', 'dashboard', 'copilot',
   'github-copilot', 'mobile', 'premium-support', 'sessions', 'password_reset', 'user-attachments', 'assets',
@@ -104,6 +104,8 @@ export function routeFromUrl(href: string): string | null {
       return rest.length ? null : base;
     case 'releases':
     case 'branches':
+    case 'compare':
+    case 'settings':
       return rest.length ? null : base;
     case 'issues':
       if (rest[0] === 'new') return `${base}/new`;

@@ -10,6 +10,7 @@ import { Commit, Commits } from './pages/Commits';
 import { Home } from './pages/Home';
 import { GlobalIssues, IssueDetail, IssueList, NewIssue } from './pages/Issues';
 import { Actions, Branches, Login, Notifications, Releases, RunDetail, Search } from './pages/Misc';
+import { FileEditor, NewPull, NewRepo, RepoSettings } from './pages/Manage';
 import { Profile } from './pages/Profile';
 import { Blob, Code, RepoLayout } from './pages/Repo';
 import { activeTabPath } from './lib/store';
@@ -31,6 +32,7 @@ createRoot(document.getElementById('root')!).render(
               <Route index element={<Home />} />
               <Route path="notifications" element={<Notifications />} />
               <Route path="search" element={<Search />} />
+              <Route path="new" element={<NewRepo />} />
               <Route path="pulls" element={<GlobalIssues kind="pr" />} />
               <Route path="issues" element={<GlobalIssues kind="issue" />} />
               <Route path=":owner" element={<Profile />} />
@@ -38,6 +40,10 @@ createRoot(document.getElementById('root')!).render(
                 <Route index element={<Code />} />
                 <Route path="tree/*" element={<Code />} />
                 <Route path="blob/*" element={<Blob />} />
+                <Route path="edit/*" element={<FileEditor />} />
+                <Route path="new/*" element={<FileEditor create />} />
+                <Route path="compare" element={<NewPull />} />
+                <Route path="settings" element={<RepoSettings />} />
                 <Route path="issues" element={<IssueList kind="issue" />} />
                 <Route path="pulls" element={<IssueList kind="pr" />} />
                 <Route path="issues/new" element={<NewIssue />} />
