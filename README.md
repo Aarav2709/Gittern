@@ -9,6 +9,7 @@ Gittern is github.com but native: a fast, monochrome desktop client for GitHub.
 - **Actions**: workflows, runs, jobs, steps and searchable logs, run a workflow, re-run and cancel, artifacts and caches.
 - **Gists**: browse, create, edit, star, fork, comment.
 - **Inbox**: notifications grouped by repository, filters, mark read or done, unsubscribe, desktop notifications.
+- **Desktop mode**: the switch beside the logo opens local repositories: clone, see changes and diffs, commit selected files, discard, undo the last commit, switch and create branches, fetch, pull, push, and browse history. It drives the `git` on your machine.
 - **Workspace**: tabs with their own history, a sidebar with your work and repositories, a command palette, saved drafts, keyboard navigation.
 
 Built with Tauri 2 (Rust) and React. It talks to the GitHub API directly; the token stays in the
@@ -26,12 +27,18 @@ npm run check          # types, lint and tests
 Sign-in: Gittern uses your GitHub CLI session (`gh auth login`) if there is one, a
 `GITTERN_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` environment variable, or a personal access token
 you paste in, which is stored in the system keyring. GitHub Enterprise Server works too: pick it
-on the sign-in screen and enter the hostname. Browser sign-in (OAuth device flow) appears when
-the app is built or run with `GITTERN_OAUTH_CLIENT_ID` set to the client ID of a GitHub OAuth app.
+on the sign-in screen and enter the hostname.
+
+Browser sign-in (no token, no setup for the person using the app) needs a GitHub OAuth app once per
+project: create one at github.com/settings/applications/new, tick **Enable Device Flow**, and paste
+its client ID into `src-tauri/oauth_client_id.txt` before building. The client ID is public, not a
+secret. `GITTERN_OAUTH_CLIENT_ID` in the environment overrides the file.
 
 Projects need the `read:project` scope: `gh auth refresh -s read:project`.
 
-Videos embedded in readmes and comments open in your browser instead of playing inline.
+Videos in readmes and comments play inline when the system has the codecs. On Linux that means
+GStreamer's `playbin`, `autoaudiosink` and an H.264 decoder (Arch: `gst-plugins-good gst-libav`);
+without them videos open in the browser, because WebKitGTK hangs on a half-installed GStreamer.
 
 ## Keys
 
