@@ -10,12 +10,16 @@ import {
   RepoIcon,
   SkipIcon,
   StarIcon,
+  CheckIcon,
+  CopyIcon,
+  XIcon,
 } from '@primer/octicons-react';
 import DOMPurify from 'dompurify';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { GhError } from '../lib/api';
-import { compact, fullDate, timeAgo } from '../lib/util';
+import { dismissToast, settleConfirm, useConfirmRequest, useToasts } from '../lib/feedback';
+import { compact, copyText, fullDate, timeAgo } from '../lib/util';
 
 export function Loading({ label }: { label?: string }) {
   return (
@@ -79,7 +83,7 @@ export function Time({ iso }: { iso: string }) {
   return <time title={fullDate(iso)}>{timeAgo(iso)}</time>;
 }
 
-/** Where a rendered file lives, so its relative links and images can be resolved. */
+// where a rendered file lives, to resolve its relative links
 export interface MarkdownBase {
   repo: string;
   ref: string;
@@ -91,20 +95,14 @@ const ABSOLUTE = /^([a-z][a-z0-9+.-]*:|#|\/\/)/i;
 function resolveRelative(url: string, base: MarkdownBase, raw: boolean): string {
   const root = raw ? `https://raw.githubusercontent.com/${base.repo}/${base.ref}/` : `https://github.com/${base.repo}/blob/${base.ref}/`;
   try {
-    // A leading "/" means the repository root, otherwise relative to the file's directory.
+    // a leading slash means the repository root
     return new URL(url.startsWith('/') ? url.slice(1) : url, url.startsWith('/') || !base.dir ? root : `${root}${base.dir}/`).href;
   } catch {
     return url;
   }
 }
 
-/**
- * GitHub's HTML, sanitised. Two fix-ups on top:
- * - inline <video>/<audio> become links: WebKitGTK hangs the whole view when GStreamer's
- *   audio plugins are missing, and they often are;
- * - the API leaves a README's relative links and images relative, so they are pointed
- *   back at the repository (links then route in-app like any github.com URL).
- */
+// github's html, sanitised
 function prepareHtml(html: string, base?: MarkdownBase): string {
   const clean = DOMPurify.sanitize(html, { FORBID_TAGS: ['style'] });
   const hasMedia = /<(video|audio)\b/i.test(clean);
@@ -153,9 +151,18 @@ export function LangDot({ name }: { name: string }) {
 }
 
 export function LoadMore({ q }: { q: { hasNextPage: boolean; isFetchingNextPage: boolean; fetchNextPage: () => unknown } }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // fetch the next page as the button scrolls into view
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !q.hasNextPage) return;
+    const io = new IntersectionObserver((entries) => entries[0].isIntersecting && !q.isFetchingNextPage && q.fetchNextPage(), { rootMargin: '400px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [q.hasNextPage, q.isFetchingNextPage, q.fetchNextPage]);
   if (!q.hasNextPage) return null;
   return (
-    <div className="load-more">
+    <div className="load-more" ref={ref}>
       <button className="btn" disabled={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>
         {q.isFetchingNextPage ? 'Loading…' : 'Load more'}
       </button>
@@ -163,13 +170,17 @@ export function LoadMore({ q }: { q: { hasNextPage: boolean; isFetchingNextPage:
   );
 }
 
-/** Button + popover that closes on outside click or Escape. */
+// button + popover
 export function Dropdown({
   trigger,
   children,
   align = 'left',
   className = 'btn',
+  title,
+  disabled,
 }: {
+  title?: string;
+  disabled?: boolean;
   trigger: ReactNode;
   children: (close: () => void) => ReactNode;
   align?: 'left' | 'right' | 'up';
@@ -190,7 +201,7 @@ export function Dropdown({
   }, [open]);
   return (
     <div className="dropdown" ref={ref}>
-      <button className={className} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+      <button type="button" className={className} onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="true" title={title} disabled={disabled}>
         {trigger}
       </button>
       {open && <div className={`popover ${align}`}>{children(() => setOpen(false))}</div>}
@@ -200,7 +211,7 @@ export function Dropdown({
 
 export type ItemState = 'open' | 'closed' | 'merged' | 'draft' | 'skipped';
 
-/** Works for search results, issue objects and pull request objects alike. */
+// works for search results, issues and pull requests alike
 export function itemState(item: any): { state: ItemState; label: string; isPr: boolean } {
   const isPr = !!item.pull_request || 'merged' in item || 'head' in item;
   if (isPr) {
@@ -298,6 +309,165 @@ export function Segmented<T extends string>({
         <button key={o.value} className={o.value === value ? 'on' : ''} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
+      ))}
+    </div>
+  );
+}
+
+// loading, error and empty states for a list query
+export function ListState({
+  q,
+  count,
+  empty,
+  children,
+}: {
+  q: { isLoading: boolean; error: GhError | Error | null; refetch?: () => unknown };
+  count: number;
+  empty: string;
+  children?: ReactNode;
+}) {
+  if (q.isLoading) return <Loading />;
+  if (q.error) return <ErrorBox error={q.error} retry={q.refetch} />;
+  if (count === 0) return <Empty title={empty}>{children}</Empty>;
+  return null;
+}
+
+// underline tabs whose selection lives in the url
+export function SubTabs({ tabs, param = 'tab' }: { tabs: { id: string; label: ReactNode; count?: number }[]; param?: string }) {
+  const [sp, setSp] = useSearchParams();
+  const current = sp.get(param) ?? tabs[0].id;
+  return (
+    <nav className="tabs">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          className={`tab ${current === t.id ? 'active' : ''}`}
+          onClick={() => {
+            const next = new URLSearchParams();
+            if (t.id !== tabs[0].id) next.set(param, t.id);
+            setSp(next);
+          }}
+        >
+          {t.label}
+          {!!t.count && <span className="count">{compact(t.count)}</span>}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+export function useSubTab(first: string, param = 'tab') {
+  return useSearchParams()[0].get(param) ?? first;
+}
+
+export function CopyButton({ text, label, className = 'btn sm' }: { text: string; label?: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={className}
+      title="Copy"
+      onClick={() => {
+        void copyText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+    >
+      {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+      {label}
+    </button>
+  );
+}
+
+export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <div className={`dialog ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="dialog-head">
+          <h2>{title}</h2>
+          <button className="icon-btn sm" onClick={onClose} aria-label="Close">
+            <XIcon />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function Toasts() {
+  const toasts = useToasts();
+  return (
+    <div className="toasts" role="status" aria-live="polite">
+      {toasts.map((t) => (
+        <button key={t.id} className={`toast ${t.kind}`} onClick={() => dismissToast(t.id)}>
+          {t.message}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function ConfirmHost() {
+  const req = useConfirmRequest();
+  const [typed, setTyped] = useState('');
+  useEffect(() => setTyped(''), [req]);
+  if (!req) return null;
+  const locked = !!req.typeToConfirm && typed !== req.typeToConfirm;
+  return (
+    <Modal title={req.title} onClose={() => settleConfirm(false)}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!locked) settleConfirm(true);
+        }}
+      >
+        {req.body && <p className="muted">{req.body}</p>}
+        {req.typeToConfirm && (
+          <label className="field">
+            <span>
+              Type <strong>{req.typeToConfirm}</strong> to confirm
+            </span>
+            <input className="input" autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} />
+          </label>
+        )}
+        <div className="form-foot">
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={() => settleConfirm(false)}>
+            Cancel
+          </button>
+          <button className={`btn ${req.danger ? 'danger' : 'primary'}`} disabled={locked} autoFocus={!req.typeToConfirm}>
+            {req.confirmLabel ?? 'Confirm'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      {children}
+      {hint && <span className="muted small">{hint}</span>}
+    </label>
+  );
+}
+
+// a simple monochrome bar chart
+export function Bars({ values, labels, height = 80 }: { values: number[]; labels?: string[]; height?: number }) {
+  const max = Math.max(1, ...values);
+  return (
+    <div className="bars" style={{ height }}>
+      {values.map((v, i) => (
+        <span key={i} title={labels ? `${labels[i]}: ${v.toLocaleString()}` : v.toLocaleString()} style={{ height: `${Math.max(v ? 3 : 0, (v / max) * 100)}%` }} />
       ))}
     </div>
   );
