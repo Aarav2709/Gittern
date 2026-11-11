@@ -1,5 +1,7 @@
 // gittern backend
 
+mod git;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -29,6 +31,9 @@ struct Settings {
     // github enterprise server hostname
     #[serde(default)]
     host: Option<String>,
+    // local repositories added in desktop mode
+    #[serde(default)]
+    repos: Vec<String>,
 }
 
 struct Cached {
@@ -121,11 +126,23 @@ fn keyring_entry(host: &str) -> Option<keyring::Entry> {
     keyring::Entry::new(SERVICE, &account).ok()
 }
 
+// the oauth app's public client id: environment first, then the file baked into the build
 fn client_id() -> Option<String> {
     std::env::var("GITTERN_OAUTH_CLIENT_ID")
         .ok()
-        .or_else(|| option_env!("GITTERN_OAUTH_CLIENT_ID").map(str::to_string))
-        .filter(|v| !v.trim().is_empty())
+        .or_else(|| Some(include_str!("../oauth_client_id.txt").to_string()))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+// inline video hangs webkitgtk when gstreamer lacks its audio or h264 plugins
+#[tauri::command(async)]
+fn media_support() -> bool {
+    if !cfg!(target_os = "linux") {
+        return true;
+    }
+    let has = |el: &str| Command::new("gst-inspect-1.0").args(["--exists", el]).status().map(|s| s.success()).unwrap_or(false);
+    has("playbin") && has("autoaudiosink") && ["avdec_h264", "openh264dec", "vah264dec", "vaapih264dec"].iter().any(|d| has(d))
 }
 
 // token lookup order
@@ -392,6 +409,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(move |app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
@@ -420,7 +438,23 @@ pub fn run() {
             use_ambient_token,
             sign_out,
             device_start,
-            device_poll
+            device_poll,
+            media_support,
+            git::local_repos,
+            git::add_local_repo,
+            git::remove_local_repo,
+            git::clone_repo,
+            git::git_status,
+            git::git_diff,
+            git::git_commit,
+            git::git_discard,
+            git::git_branches,
+            git::git_switch,
+            git::git_sync,
+            git::git_log,
+            git::git_show,
+            git::git_undo,
+            git::git_remote
         ])
         .run(tauri::generate_context!())
         .expect("error while running Gittern");

@@ -1,0 +1,412 @@
+// local git workspace: every command runs the user's git in a folder they picked
+
+use std::path::{Component, Path, PathBuf};
+use std::process::Command;
+
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
+
+use crate::AppState;
+
+#[derive(Serialize)]
+pub struct LocalRepo {
+    path: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+pub struct FileChange {
+    path: String,
+    // new, modified, deleted, renamed or conflict
+    status: &'static str,
+    untracked: bool,
+}
+
+#[derive(Serialize, Default)]
+pub struct Status {
+    branch: String,
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+    files: Vec<FileChange>,
+}
+
+#[derive(Serialize)]
+pub struct Branches {
+    current: String,
+    all: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct LogEntry {
+    sha: String,
+    subject: String,
+    author: String,
+    date: String,
+}
+
+#[derive(Deserialize)]
+pub struct Discard {
+    path: String,
+    untracked: bool,
+}
+
+fn name_of(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+fn to_repo(path: &str) -> LocalRepo {
+    LocalRepo { path: path.to_string(), name: name_of(Path::new(path)) }
+}
+
+// only folders the user added through the picker can be operated on
+fn repo_dir(state: &AppState, repo: &str) -> Result<PathBuf, String> {
+    if state.settings.lock().unwrap().repos.iter().any(|r| r == repo) {
+        Ok(PathBuf::from(repo))
+    } else {
+        Err("That folder isn't one of your local repositories".into())
+    }
+}
+
+pub fn safe_rel(path: &str) -> Result<&str, String> {
+    let p = Path::new(path);
+    let ok = !path.is_empty() && !p.is_absolute() && p.components().all(|c| matches!(c, Component::Normal(_)));
+    if ok { Ok(path) } else { Err(format!("Unsafe path: {path}")) }
+}
+
+pub fn safe_ref(name: &str) -> Result<&str, String> {
+    let ok = !name.is_empty()
+        && !name.starts_with('-')
+        && !name.contains("..")
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.' | '+' | '@' | '#'));
+    if ok { Ok(name) } else { Err(format!("Not a valid branch or commit name: {name}")) }
+}
+
+// https urls on the signed-in host, or the usual ssh shorthand
+pub fn safe_clone_url(url: &str) -> Result<&str, String> {
+    let ok = !url.contains(char::is_whitespace)
+        && !url.contains("::")
+        && (url.starts_with("https://") || (url.starts_with("git@") && url.contains(':')) || url.starts_with("ssh://"));
+    if ok { Ok(url) } else { Err("Use an https:// or git@ clone URL".into()) }
+}
+
+pub fn clone_name(url: &str) -> String {
+    let tail = url.trim_end_matches('/').rsplit(['/', ':']).next().unwrap_or("repository");
+    let name = tail.trim_end_matches(".git");
+    if name.is_empty() || name.starts_with('.') { "repository".into() } else { name.to_string() }
+}
+
+// the token goes in through the environment so it never shows up in argv
+fn auth_env(cmd: &mut Command, state: &AppState, remote: &str) {
+    let host = state.host();
+    let token = state.token.lock().unwrap().clone();
+    let (Some(token), true) = (token, remote.starts_with(&format!("https://{host}/"))) else { return };
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{}", token.value));
+    cmd.env("GIT_CONFIG_COUNT", "2")
+        .env("GIT_CONFIG_KEY_0", "credential.helper")
+        .env("GIT_CONFIG_VALUE_0", "")
+        .env("GIT_CONFIG_KEY_1", format!("http.https://{host}/.extraheader"))
+        .env("GIT_CONFIG_VALUE_1", format!("AUTHORIZATION: basic {basic}"));
+}
+
+fn base(dir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").env("LC_ALL", "C").arg("-c").arg("core.quotepath=off");
+    cmd
+}
+
+fn finish(mut cmd: Command, ok_codes: &[i32]) -> Result<String, String> {
+    let out = cmd.output().map_err(|e| format!("Could not run git: {e}"))?;
+    let code = out.status.code().unwrap_or(-1);
+    if ok_codes.contains(&code) {
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let msg = err.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("git failed").trim();
+    Err(msg.trim_start_matches("fatal: ").trim_start_matches("error: ").to_string())
+}
+
+fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = base(dir);
+    cmd.args(args);
+    finish(cmd, &[0])
+}
+
+fn origin(dir: &Path) -> String {
+    git(dir, &["remote", "get-url", "origin"]).map(|s| s.trim().to_string()).unwrap_or_default()
+}
+
+pub fn parse_status(raw: &str) -> Status {
+    let mut st = Status::default();
+    let mut parts = raw.split('\0');
+    while let Some(entry) = parts.next() {
+        if let Some(v) = entry.strip_prefix("# branch.head ") {
+            st.branch = v.to_string();
+        } else if let Some(v) = entry.strip_prefix("# branch.upstream ") {
+            st.upstream = Some(v.to_string());
+        } else if let Some(v) = entry.strip_prefix("# branch.ab ") {
+            let mut ab = v.split(' ');
+            st.ahead = ab.next().and_then(|a| a.trim_start_matches('+').parse().ok()).unwrap_or(0);
+            st.behind = ab.next().and_then(|b| b.trim_start_matches('-').parse().ok()).unwrap_or(0);
+        } else if let Some(path) = entry.strip_prefix("? ") {
+            st.files.push(FileChange { path: path.to_string(), status: "new", untracked: true });
+        } else if entry.starts_with("1 ") || entry.starts_with("2 ") || entry.starts_with("u ") {
+            let kind = &entry[..1];
+            let fields = match kind {
+                "1" => 9,
+                "2" => 10,
+                _ => 11,
+            };
+            let mut it = entry.splitn(fields, ' ');
+            let xy = it.nth(1).unwrap_or("..");
+            let Some(path) = it.last() else { continue };
+            // a rename carries its old path as the next entry
+            if kind == "2" {
+                parts.next();
+            }
+            let status = if kind == "u" {
+                "conflict"
+            } else if kind == "2" {
+                "renamed"
+            } else if xy.contains('D') {
+                "deleted"
+            } else if xy.contains('A') {
+                "new"
+            } else {
+                "modified"
+            };
+            st.files.push(FileChange { path: path.to_string(), status, untracked: false });
+        }
+    }
+    st
+}
+
+fn remember(state: &AppState, path: &Path) -> LocalRepo {
+    let path = path.to_string_lossy().into_owned();
+    state.update_settings(|s| {
+        s.repos.retain(|r| r != &path);
+        s.repos.insert(0, path.clone());
+    });
+    to_repo(&path)
+}
+
+#[tauri::command(async)]
+pub fn local_repos(state: State<'_, AppState>) -> Vec<LocalRepo> {
+    let repos = state.settings.lock().unwrap().repos.clone();
+    repos.iter().filter(|p| Path::new(p).is_dir()).map(|p| to_repo(p)).collect()
+}
+
+// the folder comes from a native picker, never from the webview
+#[tauri::command(async)]
+pub fn add_local_repo(app: AppHandle, state: State<'_, AppState>, init: bool) -> Result<Option<LocalRepo>, String> {
+    let Some(picked) = app.dialog().file().set_title("Choose a repository folder").blocking_pick_folder() else { return Ok(None) };
+    let dir = picked.into_path().map_err(|e| e.to_string())?;
+    if init && !dir.join(".git").exists() {
+        git(&dir, &["init"])?;
+    }
+    let top = git(&dir, &["rev-parse", "--show-toplevel"]).map_err(|_| "That folder isn't a Git repository".to_string())?;
+    Ok(Some(remember(&state, Path::new(top.trim()))))
+}
+
+#[tauri::command(async)]
+pub fn remove_local_repo(state: State<'_, AppState>, repo: String) {
+    state.update_settings(|s| s.repos.retain(|r| r != &repo));
+}
+
+#[tauri::command(async)]
+pub fn clone_repo(app: AppHandle, state: State<'_, AppState>, url: String) -> Result<Option<LocalRepo>, String> {
+    let url = safe_clone_url(url.trim())?.to_string();
+    let Some(picked) = app.dialog().file().set_title("Choose where to clone").blocking_pick_folder() else { return Ok(None) };
+    let parent = picked.into_path().map_err(|e| e.to_string())?;
+    let dest = parent.join(clone_name(&url));
+    if dest.exists() {
+        return Err(format!("{} already exists", dest.display()));
+    }
+    let mut cmd = base(&parent);
+    auth_env(&mut cmd, &state, &url);
+    cmd.arg("clone").arg("--").arg(&url).arg(&dest);
+    finish(cmd, &[0])?;
+    Ok(Some(remember(&state, &dest)))
+}
+
+#[tauri::command(async)]
+pub fn git_status(state: State<'_, AppState>, repo: String) -> Result<Status, String> {
+    let dir = repo_dir(&state, &repo)?;
+    Ok(parse_status(&git(&dir, &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"])?))
+}
+
+#[tauri::command(async)]
+pub fn git_diff(state: State<'_, AppState>, repo: String, path: String, untracked: bool) -> Result<String, String> {
+    let dir = repo_dir(&state, &repo)?;
+    let path = safe_rel(&path)?;
+    let mut cmd = base(&dir);
+    if untracked {
+        cmd.args(["diff", "--no-color", "--no-index", "--", "/dev/null", path]);
+        return finish(cmd, &[0, 1]);
+    }
+    // before the first commit there is no head to compare with
+    let has_head = git(&dir, &["rev-parse", "--verify", "-q", "HEAD"]).is_ok();
+    cmd.args(["diff", "--no-color"]).arg(if has_head { "HEAD" } else { "--cached" }).arg("--").arg(path);
+    finish(cmd, &[0])
+}
+
+#[tauri::command(async)]
+pub fn git_commit(state: State<'_, AppState>, repo: String, summary: String, description: String, paths: Vec<String>) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    if summary.trim().is_empty() || paths.is_empty() {
+        return Err("A commit needs a summary and at least one file".into());
+    }
+    let _ = git(&dir, &["reset", "-q"]);
+    let mut add = base(&dir);
+    add.args(["add", "-A", "--"]);
+    for p in &paths {
+        add.arg(safe_rel(p)?);
+    }
+    finish(add, &[0])?;
+    let mut commit = base(&dir);
+    commit.args(["commit", "-q", "-m", summary.trim()]);
+    if !description.trim().is_empty() {
+        commit.args(["-m", description.trim()]);
+    }
+    finish(commit, &[0]).map(|_| ())
+}
+
+#[tauri::command(async)]
+pub fn git_discard(state: State<'_, AppState>, repo: String, files: Vec<Discard>) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    for f in &files {
+        let path = safe_rel(&f.path)?;
+        let _ = git(&dir, &["reset", "-q", "--", path]);
+        let tracked = git(&dir, &["ls-files", "--error-unmatch", "--", path]).is_ok();
+        if f.untracked || !tracked {
+            git(&dir, &["clean", "-fq", "--", path])?;
+        } else {
+            git(&dir, &["checkout", "--", path])?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn git_branches(state: State<'_, AppState>, repo: String) -> Result<Branches, String> {
+    let dir = repo_dir(&state, &repo)?;
+    let all = git(&dir, &["branch", "--format=%(refname:short)", "--sort=-committerdate"])?;
+    let current = git(&dir, &["branch", "--show-current"]).unwrap_or_default();
+    Ok(Branches { current: current.trim().to_string(), all: all.lines().map(str::to_string).filter(|b| !b.is_empty()).collect() })
+}
+
+#[tauri::command(async)]
+pub fn git_switch(state: State<'_, AppState>, repo: String, branch: String, create: bool) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    let branch = safe_ref(&branch)?;
+    let args: &[&str] = if create { &["switch", "-q", "-c", branch] } else { &["switch", "-q", branch] };
+    git(&dir, args).map(|_| ())
+}
+
+#[tauri::command(async)]
+pub fn git_sync(state: State<'_, AppState>, repo: String, op: String) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    let remote = origin(&dir);
+    if remote.is_empty() {
+        return Err("This repository has no remote called origin".into());
+    }
+    let mut cmd = base(&dir);
+    auth_env(&mut cmd, &state, &remote);
+    match op.as_str() {
+        "fetch" => cmd.args(["fetch", "-q", "--prune", "origin"]),
+        "pull" => cmd.args(["pull", "-q", "--ff-only"]),
+        // the first push of a branch also sets its upstream
+        "push" => cmd.args(["push", "-q", "-u", "origin", "HEAD"]),
+        _ => return Err("Unknown sync operation".into()),
+    };
+    finish(cmd, &[0]).map(|_| ())
+}
+
+#[tauri::command(async)]
+pub fn git_log(state: State<'_, AppState>, repo: String, skip: u32) -> Result<Vec<LogEntry>, String> {
+    let dir = repo_dir(&state, &repo)?;
+    let skip = format!("--skip={skip}");
+    let Ok(raw) = git(&dir, &["log", "-n", "60", &skip, "--format=%H%x1f%s%x1f%an%x1f%aI%x1e"]) else { return Ok(vec![]) };
+    Ok(raw
+        .split('\x1e')
+        .filter_map(|rec| {
+            let mut f = rec.trim().split('\x1f');
+            Some(LogEntry { sha: f.next().filter(|s| !s.is_empty())?.into(), subject: f.next()?.into(), author: f.next()?.into(), date: f.next()?.into() })
+        })
+        .collect())
+}
+
+#[tauri::command(async)]
+pub fn git_show(state: State<'_, AppState>, repo: String, sha: String) -> Result<String, String> {
+    let dir = repo_dir(&state, &repo)?;
+    git(&dir, &["show", "--no-color", "--format=", "--patch", safe_ref(&sha)?])
+}
+
+// takes back the last commit but keeps its changes
+#[tauri::command(async)]
+pub fn git_undo(state: State<'_, AppState>, repo: String) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    git(&dir, &["reset", "--soft", "HEAD~1"]).map(|_| ())
+}
+
+#[tauri::command(async)]
+pub fn git_remote(state: State<'_, AppState>, repo: String) -> Result<String, String> {
+    Ok(origin(&repo_dir(&state, &repo)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_porcelain_status() {
+        let raw = "# branch.oid abc\0# branch.head main\0# branch.upstream origin/main\0# branch.ab +2 -1\0\
+1 .M N... 100644 100644 100644 a b src/a file.rs\0\
+1 A. N... 000000 100644 100644 a b new.rs\0\
+1 .D N... 100644 100644 000000 a b gone.rs\0\
+2 R. N... 100644 100644 100644 a b R100 to.rs\0from.rs\0\
+u UU N... 100644 100644 100644 100644 a b c both.rs\0\
+? notes.txt\0";
+        let st = parse_status(raw);
+        assert_eq!((st.branch.as_str(), st.upstream.as_deref(), st.ahead, st.behind), ("main", Some("origin/main"), 2, 1));
+        let got: Vec<_> = st.files.iter().map(|f| (f.path.as_str(), f.status, f.untracked)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("src/a file.rs", "modified", false),
+                ("new.rs", "new", false),
+                ("gone.rs", "deleted", false),
+                ("to.rs", "renamed", false),
+                ("both.rs", "conflict", false),
+                ("notes.txt", "new", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_input() {
+        assert!(safe_rel("src/main.rs").is_ok());
+        assert!(safe_rel("../secret").is_err());
+        assert!(safe_rel("/etc/passwd").is_err());
+        assert!(safe_rel("").is_err());
+        assert!(safe_ref("feature/login-2").is_ok());
+        assert!(safe_ref("--upload-pack=x").is_err());
+        assert!(safe_ref("a..b").is_err());
+        assert!(safe_ref("a b").is_err());
+        assert!(safe_clone_url("https://github.com/cli/cli.git").is_ok());
+        assert!(safe_clone_url("git@github.com:cli/cli.git").is_ok());
+        assert!(safe_clone_url("ext::sh -c evil").is_err());
+        assert!(safe_clone_url("--upload-pack=evil").is_err());
+        assert!(safe_clone_url("/tmp/local").is_err());
+    }
+
+    #[test]
+    fn names_a_clone_folder() {
+        assert_eq!(clone_name("https://github.com/cli/cli.git"), "cli");
+        assert_eq!(clone_name("git@github.com:rust-lang/rust"), "rust");
+        assert_eq!(clone_name("https://github.com/a/b/"), "b");
+        assert_eq!(clone_name("https://github.com/a/.git"), "repository");
+    }
+}
