@@ -135,13 +135,26 @@ fn client_id() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+// a child process that never flashes a console window on windows
+pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
+}
+
 // inline video needs gstreamer's demuxer, audio sink and an h264 decoder
 #[tauri::command(async)]
 fn media_support() -> bool {
     if !cfg!(target_os = "linux") {
         return true;
     }
-    let has = |el: &str| Command::new("gst-inspect-1.0").args(["--exists", el]).status().map(|s| s.success()).unwrap_or(false);
+    let has = |el: &str| quiet("gst-inspect-1.0").args(["--exists", el]).status().map(|s| s.success()).unwrap_or(false);
     has("playbin") && has("autoaudiosink") && has("qtdemux") && ["avdec_h264", "openh264dec", "vah264dec", "vaapih264dec"].iter().any(|d| has(d))
 }
 
@@ -163,7 +176,7 @@ fn resolve_token(settings: &Settings) -> Option<Token> {
             }
         }
     }
-    let out = Command::new("gh").args(["auth", "token", "--hostname", host]).output().ok()?;
+    let out = quiet("gh").args(["auth", "token", "--hostname", host]).output().ok()?;
     if out.status.success() {
         let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !value.is_empty() {

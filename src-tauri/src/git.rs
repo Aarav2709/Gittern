@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::AppState;
+use crate::{quiet, AppState};
 
 #[derive(Serialize)]
 pub struct LocalRepo {
@@ -112,7 +112,7 @@ fn auth_env(cmd: &mut Command, state: &AppState, remote: &str) {
 }
 
 fn base(dir: &Path) -> Command {
-    let mut cmd = Command::new("git");
+    let mut cmd = quiet("git");
     cmd.current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").env("LC_ALL", "C").arg("-c").arg("core.quotepath=off");
     cmd
 }
@@ -243,7 +243,7 @@ pub fn git_diff(state: State<'_, AppState>, repo: String, path: String, untracke
     let path = safe_rel(&path)?;
     let mut cmd = base(&dir);
     if untracked {
-        cmd.args(["diff", "--no-color", "--no-index", "--", "/dev/null", path]);
+        cmd.args(["diff", "--no-color", "--no-index", "--", if cfg!(windows) { "NUL" } else { "/dev/null" }, path]);
         return finish(cmd, &[0, 1]);
     }
     // before the first commit there is no head to compare with
