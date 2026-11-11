@@ -79,13 +79,36 @@ export function Time({ iso }: { iso: string }) {
   return <time title={fullDate(iso)}>{timeAgo(iso)}</time>;
 }
 
+/** Where a rendered file lives, so its relative links and images can be resolved. */
+export interface MarkdownBase {
+  repo: string;
+  ref: string;
+  dir?: string;
+}
+
+const ABSOLUTE = /^([a-z][a-z0-9+.-]*:|#|\/\/)/i;
+
+function resolveRelative(url: string, base: MarkdownBase, raw: boolean): string {
+  const root = raw ? `https://raw.githubusercontent.com/${base.repo}/${base.ref}/` : `https://github.com/${base.repo}/blob/${base.ref}/`;
+  try {
+    // A leading "/" means the repository root, otherwise relative to the file's directory.
+    return new URL(url.startsWith('/') ? url.slice(1) : url, url.startsWith('/') || !base.dir ? root : `${root}${base.dir}/`).href;
+  } catch {
+    return url;
+  }
+}
+
 /**
- * GitHub's HTML, sanitised. Inline <video>/<audio> become links: WebKitGTK hangs
- * the whole view when GStreamer's audio plugins are missing, and they often are.
+ * GitHub's HTML, sanitised. Two fix-ups on top:
+ * - inline <video>/<audio> become links: WebKitGTK hangs the whole view when GStreamer's
+ *   audio plugins are missing, and they often are;
+ * - the API leaves a README's relative links and images relative, so they are pointed
+ *   back at the repository (links then route in-app like any github.com URL).
  */
-function prepareHtml(html: string): string {
+function prepareHtml(html: string, base?: MarkdownBase): string {
   const clean = DOMPurify.sanitize(html, { FORBID_TAGS: ['style'] });
-  if (!/<(video|audio)\b/i.test(clean)) return clean;
+  const hasMedia = /<(video|audio)\b/i.test(clean);
+  if (!hasMedia && !base) return clean;
   const doc = new DOMParser().parseFromString(clean, 'text/html');
   doc.querySelectorAll('video, audio').forEach((el) => {
     const src = el.getAttribute('src') ?? el.querySelector('source')?.getAttribute('src');
@@ -98,11 +121,21 @@ function prepareHtml(html: string): string {
     }
     el.replaceWith(link);
   });
+  if (base) {
+    doc.querySelectorAll('a[href]').forEach((a) => {
+      const href = a.getAttribute('href')!;
+      if (!ABSOLUTE.test(href)) a.setAttribute('href', resolveRelative(href, base, false));
+    });
+    doc.querySelectorAll('img[src]').forEach((img) => {
+      const src = img.getAttribute('src')!;
+      if (!ABSOLUTE.test(src)) img.setAttribute('src', resolveRelative(src, base, true));
+    });
+  }
   return doc.body.innerHTML;
 }
 
-export function Markdown({ html }: { html: string }) {
-  const clean = useMemo(() => prepareHtml(html), [html]);
+export function Markdown({ html, base }: { html: string; base?: MarkdownBase }) {
+  const clean = useMemo(() => prepareHtml(html, base), [html, base?.repo, base?.ref, base?.dir]);
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: clean }} />;
 }
 

@@ -21,7 +21,7 @@ import {
   XIcon,
 } from '@primer/octicons-react';
 import { useIsFetching } from '@tanstack/react-query';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { queryClient, useGh } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -66,7 +66,7 @@ function store(key: string, value: string) {
 }
 applyTheme(stored('theme', 'system') as Theme);
 
-const TOP_PAGES: Record<string, string> = { notifications: 'Inbox', pulls: 'Pull requests', issues: 'Issues', search: 'Search' };
+const TOP_PAGES: Record<string, string> = { notifications: 'Inbox', pulls: 'Pull requests', issues: 'Issues', search: 'Search', new: 'New repository' };
 
 /** Short label + icon for a tab, derived from its route alone so it never needs a fetch. */
 function describeTab(path: string): { title: string; icon: ReactNode } {
@@ -80,6 +80,7 @@ function describeTab(path: string): { title: string; icon: ReactNode } {
       pulls: <GitPullRequestIcon size={14} />,
       issues: <IssueOpenedIcon size={14} />,
       search: <SearchIcon size={14} />,
+      new: <PlusIcon size={14} />,
     }[seg[0]];
     return { title: seg[0] === 'search' && q ? q : TOP_PAGES[seg[0]], icon };
   }
@@ -101,6 +102,29 @@ function describeTab(path: string): { title: string; icon: ReactNode } {
       return { title: `${repo} actions`, icon: <PlayIcon size={14} /> };
     default:
       return { title: `${seg[0]}/${repo}`, icon: <RepoIcon size={14} /> };
+  }
+}
+
+/** A crash in one page shows a message there instead of blanking the whole app. */
+class PageBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error) {
+    console.error('[gittern] page crashed:', error);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="empty">
+        <h3>This page hit a problem</h3>
+        <p>{this.state.error.message}</p>
+        <button className="btn" onClick={() => this.setState({ error: null })}>
+          Try again
+        </button>
+      </div>
+    );
   }
 }
 
@@ -270,7 +294,9 @@ export function Shell() {
           </button>
         </header>
         <main ref={mainRef}>
-          <Outlet />
+          <PageBoundary key={here}>
+            <Outlet />
+          </PageBoundary>
         </main>
       </div>
       {palette && <Palette onClose={() => setPalette(false)} />}
@@ -339,6 +365,7 @@ function Sidebar({ here, theme, cycleTheme, openPalette }: { here: string; theme
           here={here}
           trailing={count > 0 ? <span className="side-count">{count >= 50 ? '50+' : count}</span> : null}
         />
+        <SideLink to="/new" icon={<PlusIcon />} label="New repository" here={here} />
       </div>
       <div className="side-group">
         <div className="side-heading">Pull requests</div>
