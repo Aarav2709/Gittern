@@ -12,6 +12,7 @@ import {
   StarIcon,
   CheckIcon,
   CopyIcon,
+  InboxIcon,
   XIcon,
 } from '@primer/octicons-react';
 import DOMPurify from 'dompurify';
@@ -19,6 +20,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { GhError } from '../lib/api';
 import { dismissToast, settleConfirm, useConfirmRequest, useToasts } from '../lib/feedback';
+import { langColor } from '../lib/langs';
 import { compact, copyText, fullDate, timeAgo } from '../lib/util';
 
 export function Loading({ label }: { label?: string }) {
@@ -45,9 +47,11 @@ export function ErrorBox({ error, retry }: { error: GhError | Error; retry?: () 
   );
 }
 
-export function Empty({ title, children }: { title: string; children?: ReactNode }) {
+export function Empty({ title, children, icon }: { title: string; children?: ReactNode; icon?: ReactNode }) {
+  if (!title) return null;
   return (
     <div className="empty">
+      <span className="empty-art">{icon ?? <InboxIcon size={22} />}</span>
       <h3>{title}</h3>
       {children && <p>{children}</p>}
     </div>
@@ -103,6 +107,15 @@ function resolveRelative(url: string, base: MarkdownBase, raw: boolean): string 
 }
 
 // github's html, sanitised
+// set once at startup: whether this system can play video without hanging the view
+let inlineMedia = false;
+// null until the system has been probed
+export let mediaProbe: boolean | null = null;
+export const setInlineMedia = (supported: boolean, enabled: boolean) => {
+  mediaProbe = supported;
+  inlineMedia = supported && enabled;
+};
+
 function prepareHtml(html: string, base?: MarkdownBase): string {
   const clean = DOMPurify.sanitize(html, { FORBID_TAGS: ['style'] });
   const hasMedia = /<(video|audio)\b/i.test(clean);
@@ -112,12 +125,17 @@ function prepareHtml(html: string, base?: MarkdownBase): string {
     const src = el.getAttribute('src') ?? el.querySelector('source')?.getAttribute('src');
     const link = doc.createElement('a');
     link.className = 'media-link';
-    link.textContent = `Play ${el.tagName.toLowerCase()} in browser`;
+    link.textContent = inlineMedia ? 'Open in browser' : `Play ${el.tagName.toLowerCase()} in browser`;
     if (src) {
       link.setAttribute('href', src);
       link.setAttribute('data-external', '');
     }
-    el.replaceWith(link);
+    if (inlineMedia && src?.startsWith('https://')) {
+      el.setAttribute('controls', '');
+      el.setAttribute('preload', 'metadata');
+      el.removeAttribute('autoplay');
+      el.after(link);
+    } else el.replaceWith(link);
   });
   if (base) {
     doc.querySelectorAll('a[href]').forEach((a) => {
@@ -137,14 +155,19 @@ export function Markdown({ html, base }: { html: string; base?: MarkdownBase }) 
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: clean }} />;
 }
 
-export function Label({ label }: { label: { name: string } }) {
-  return <span className="label">{label.name}</span>;
+export function Label({ label }: { label: { name: string; color?: string } }) {
+  const c = /^[0-9a-f]{6}$/i.test(label.color ?? '') ? `#${label.color}` : undefined;
+  return (
+    <span className={`label ${c ? 'tinted' : ''}`} style={c ? ({ '--c': c } as React.CSSProperties) : undefined}>
+      {label.name}
+    </span>
+  );
 }
 
 export function LangDot({ name }: { name: string }) {
   return (
     <span className="meta-item">
-      <span className="lang-dot" />
+      <span className="lang-dot" style={{ background: langColor(name) }} />
       {name}
     </span>
   );
@@ -470,5 +493,13 @@ export function Bars({ values, labels, height = 80 }: { values: number[]; labels
         <span key={i} title={labels ? `${labels[i]}: ${v.toLocaleString()}` : v.toLocaleString()} style={{ height: `${Math.max(v ? 3 : 0, (v / max) * 100)}%` }} />
       ))}
     </div>
+  );
+}
+
+export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} className={`switch ${checked ? 'on' : ''}`} onClick={() => onChange(!checked)}>
+      <span />
+    </button>
   );
 }

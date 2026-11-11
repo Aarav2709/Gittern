@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
 import { hasDevToken, isTauri, queryClient, setGhHost, useGh } from './api';
+import { setInlineMedia } from '../components/ui';
+import { getPref } from './store';
 import type { User } from './types';
 
 export type AuthSource = 'keyring' | 'env' | 'gh-cli' | null;
@@ -64,6 +66,7 @@ export function AuthProvider({
     try {
       const s = await invoke<Status>('auth_status');
       setGhHost(s.host);
+      void invoke<boolean>('media_support').then((ok) => setInlineMedia(ok, getPref('inline-video', 'on') === 'on'));
       setStatus(s);
     } catch {
       setStatus({ source: null, host: 'github.com', device_flow: false });

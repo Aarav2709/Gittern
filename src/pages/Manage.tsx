@@ -1,9 +1,9 @@
-import { GitBranchIcon, GitCommitIcon, KeyIcon, LockIcon, PersonIcon, TrashIcon, WebhookIcon } from '@primer/octicons-react';
+import { AlertIcon, GearIcon, GitBranchIcon, GitCommitIcon, KeyIcon, LockIcon, PersonIcon, TrashIcon, WebhookIcon } from '@primer/octicons-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DiffFile } from '../components/Diff';
 import { MarkdownEditor } from '../components/Editor';
-import { Avatar, Empty, ErrorBox, Field, ListState, Loading, SubTabs, Time, useSubTab } from '../components/ui';
+import { Avatar, Empty, ErrorBox, Field, ListState, Loading, Switch, Time, useSubTab } from '../components/ui';
 import { ACCEPT, gh, invalidate, useGh, useGhAll } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { confirmDialog, toast, useAction, useDraft } from '../lib/feedback';
@@ -11,18 +11,18 @@ import type { Branch, CommitEntry, DiffFileEntry, PullRequest, Repo, User } from
 import { encPath, plural } from '../lib/util';
 import { useRepo } from './Repo';
 
-const FEATURES: [keyof Repo, string][] = [
-  ['has_issues', 'Issues'],
-  ['has_wiki', 'Wiki'],
-  ['has_projects', 'Projects'],
-  ['has_discussions', 'Discussions'],
+const FEATURES: [keyof Repo, string, string][] = [
+  ['has_issues', 'Issues', 'Track bugs, ideas and tasks.'],
+  ['has_discussions', 'Discussions', 'A place for questions and open-ended conversation.'],
+  ['has_projects', 'Projects', 'Plan and track work on boards.'],
+  ['has_wiki', 'Wiki', 'Host documentation alongside the code.'],
 ];
-const MERGING: [keyof Repo, string][] = [
-  ['allow_merge_commit', 'Allow merge commits'],
-  ['allow_squash_merge', 'Allow squash merging'],
-  ['allow_rebase_merge', 'Allow rebase merging'],
-  ['allow_auto_merge', 'Allow auto-merge'],
-  ['delete_branch_on_merge', 'Automatically delete head branches after merging'],
+const MERGING: [keyof Repo, string, string][] = [
+  ['allow_merge_commit', 'Merge commits', 'Keep every commit from the branch, joined by a merge commit.'],
+  ['allow_squash_merge', 'Squash merging', 'Combine the branch into a single commit.'],
+  ['allow_rebase_merge', 'Rebase merging', 'Replay the commits on top of the base branch.'],
+  ['allow_auto_merge', 'Auto-merge', 'Merge automatically once reviews and checks pass.'],
+  ['delete_branch_on_merge', 'Delete head branches', 'Remove the branch after its pull request merges.'],
 ];
 const SETTING_KEYS: (keyof Repo)[] = ['name', 'description', 'homepage', 'default_branch', ...FEATURES.map((f) => f[0]), ...MERGING.map((m) => m[0])];
 
@@ -45,55 +45,66 @@ function General({ repo }: { repo: Repo }) {
       if (updated.full_name !== repo.full_name) navigate(`/${updated.full_name}/settings`, { replace: true });
     }, 'Settings saved');
 
-  return (
-    <section className="card">
-      <div className="form-section form">
-        <Field label="Repository name">
-          <input className="input" value={form.name} onChange={(e) => set('name', e.target.value)} />
-        </Field>
-        <Field label="Description">
-          <textarea className="input" rows={2} value={form.description} onChange={(e) => set('description', e.target.value)} />
-        </Field>
-        <Field label="Website">
-          <input className="input" placeholder="https://" value={form.homepage} onChange={(e) => set('homepage', e.target.value)} />
-        </Field>
-        <Field label="Default branch">
-          <select className="input" value={form.default_branch} onChange={(e) => set('default_branch', e.target.value)}>
-            {(branches.items.length ? branches.items : [{ name: repo.default_branch }]).map((b) => (
-              <option key={b.name}>{b.name}</option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <div className="form-section form">
-        <strong>Features</strong>
-        {FEATURES.map(([key, label]) => (
-          <label key={key} className="check-row">
-            <input type="checkbox" checked={!!form[key]} onChange={(e) => set(key, e.target.checked)} /> {label}
-          </label>
-        ))}
-      </div>
-      <div className="form-section form">
-        <strong>Pull requests</strong>
-        {MERGING.map(([key, label]) => (
-          <label key={key} className="check-row">
-            <input type="checkbox" checked={!!form[key]} onChange={(e) => set(key, e.target.checked)} /> {label}
-          </label>
-        ))}
-      </div>
-      <div className="form-section">
-        <div className="form-foot">
-          <span className="muted small">{count ? plural(count, 'unsaved change') : 'No changes'}</span>
-          <span className="spacer" />
-          <button className="btn" disabled={!count || busy} onClick={() => setForm(initial)}>
-            Reset
-          </button>
-          <button className="btn primary" disabled={!count || busy || !String(form.name).trim()} onClick={save}>
-            {busy ? 'Saving…' : 'Save changes'}
-          </button>
+  const switches = (rows: [keyof Repo, string, string][]) =>
+    rows.map(([key, label, note]) => (
+      <div key={key} className="row compact">
+        <div className="row-main">
+          <strong>{label}</strong>
+          <span className="muted">{note}</span>
         </div>
+        <Switch checked={!!form[key]} onChange={(v) => set(key, v)} label={label} />
       </div>
-    </section>
+    ));
+  return (
+    <>
+      <section className="card">
+        <div className="card-head">
+          <strong>Details</strong>
+        </div>
+        <div className="form-section form">
+          <div className="split">
+            <Field label="Repository name">
+              <input className="input" value={form.name} onChange={(e) => set('name', e.target.value)} />
+            </Field>
+            <Field label="Default branch">
+              <select className="input" value={form.default_branch} onChange={(e) => set('default_branch', e.target.value)}>
+                {(branches.items.length ? branches.items : [{ name: repo.default_branch }]).map((b) => (
+                  <option key={b.name}>{b.name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <Field label="Description">
+            <textarea className="input" rows={2} value={form.description} onChange={(e) => set('description', e.target.value)} />
+          </Field>
+          <Field label="Website">
+            <input className="input" placeholder="https://" value={form.homepage} onChange={(e) => set('homepage', e.target.value)} />
+          </Field>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <strong>Features</strong>
+        </div>
+        {switches(FEATURES)}
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <strong>Pull requests</strong>
+        </div>
+        {switches(MERGING)}
+      </section>
+      <div className={`save-bar ${count ? 'dirty' : ''}`}>
+        <span className="muted small">{count ? plural(count, 'unsaved change') : 'Everything is saved'}</span>
+        <span className="spacer" />
+        <button className="btn" disabled={!count || busy} onClick={() => setForm(initial)}>
+          Reset
+        </button>
+        <button className="btn primary" disabled={!count || busy || !String(form.name).trim()} onClick={save}>
+          {busy ? 'Saving…' : 'Save changes'}
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -453,7 +464,7 @@ function Danger({ repo }: { repo: Repo }) {
     },
   ];
   return (
-    <section className="card">
+    <section className="card danger-card">
       {rows.map((r) => (
         <div key={r.title} className="row compact">
           <div className="row-main">
@@ -474,22 +485,31 @@ export function RepoSettings() {
   const { repo } = useRepo();
   const tab = useSubTab('general');
   if (!repo.permissions?.admin) return <Empty title="Settings need admin access">You can view this repository but not change its settings.</Empty>;
+  const tabs: [string, string, ReactNode][] = [
+    ['general', 'General', <GearIcon key="i" />],
+    ['access', 'Collaborators', <PersonIcon key="i" />],
+    ['branches', 'Branches', <GitBranchIcon key="i" />],
+    ['automation', 'Webhooks, keys, secrets', <WebhookIcon key="i" />],
+    ['danger', 'Danger zone', <AlertIcon key="i" />],
+  ];
   return (
-    <div className="stack narrow-form">
-      <SubTabs
-        tabs={[
-          { id: 'general', label: 'General' },
-          { id: 'access', label: 'Collaborators' },
-          { id: 'branches', label: 'Branches' },
-          { id: 'automation', label: 'Webhooks, keys and secrets' },
-          { id: 'danger', label: 'Danger zone' },
-        ]}
-      />
-      {tab === 'general' && <General repo={repo} />}
-      {tab === 'access' && <Access repo={repo} />}
-      {tab === 'branches' && <Branches repo={repo} />}
-      {tab === 'automation' && <Automation repo={repo} />}
-      {tab === 'danger' && <Danger repo={repo} />}
+    <div className="settings-layout">
+      <nav className="settings-nav" aria-label="Settings">
+        {tabs.map(([id, label, icon]) => (
+          <Link key={id} to={id === 'general' ? '?' : `?tab=${id}`} className={`side-link ${tab === id ? 'active' : ''}`}>
+            {icon}
+            <span className="side-label">{label}</span>
+          </Link>
+        ))}
+      </nav>
+      <div className="stack">
+        <h2 className="title">{tabs.find((t) => t[0] === tab)?.[1] ?? 'General'}</h2>
+        {tab === 'general' && <General repo={repo} />}
+        {tab === 'access' && <Access repo={repo} />}
+        {tab === 'branches' && <Branches repo={repo} />}
+        {tab === 'automation' && <Automation repo={repo} />}
+        {tab === 'danger' && <Danger repo={repo} />}
+      </div>
     </div>
   );
 }

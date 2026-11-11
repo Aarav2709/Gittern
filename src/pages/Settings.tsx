@@ -2,7 +2,7 @@ import { CodespacesIcon, KeyIcon, MailIcon, OrganizationIcon, RepoIcon } from '@
 import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { applyTheme, type Theme } from '../components/Shell';
-import { Field, ListState, Segmented, SubTabs, Time, useSubTab } from '../components/ui';
+import { Field, ListState, mediaProbe, Segmented, Switch, Time, useSubTab } from '../components/ui';
 import { gh, type GhError, invalidate, useGh, useRate } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { confirmDialog, useAction } from '../lib/feedback';
@@ -17,14 +17,7 @@ function Toggle({ pref, label, note }: { pref: string; label: string; note: stri
         <strong>{label}</strong>
         <span className="muted">{note}</span>
       </div>
-      <Segmented
-        value={value}
-        onChange={set}
-        options={[
-          { value: 'on', label: 'On' },
-          { value: 'off', label: 'Off' },
-        ]}
-      />
+      <Switch checked={value === 'on'} onChange={(v) => set(v ? 'on' : 'off')} label={label} />
     </div>
   );
 }
@@ -70,6 +63,7 @@ function App() {
           />
         </div>
         <Toggle pref="desktop-notifications" label="Desktop notifications" note="Shown for new inbox items while Gittern is in the background." />
+        <Toggle pref="inline-video" label="Play videos in the app" note={mediaProbe === false ? 'Off for now: this system is missing GStreamer plugins (on Arch: gst-plugins-good and gst-libav). Videos open in the browser until they are installed.' : 'Takes effect after a restart.'} />
         <Toggle pref="update-check" label="Check for updates" note="Looks for a newer Gittern release a few times a day." />
       </section>
       <section className="card">
@@ -355,23 +349,32 @@ function Account() {
 
 export function Settings() {
   const tab = useSubTab('app');
+  const tabs = [
+    ['app', 'Gittern'],
+    ['profile', 'Profile'],
+    ['account', 'Account'],
+    ['keys', 'SSH and GPG keys'],
+  ];
   return (
-    <div className="page narrow">
+    <div className="page">
       <header className="page-head">
         <h1>Settings</h1>
       </header>
-      <SubTabs
-        tabs={[
-          { id: 'app', label: 'Gittern' },
-          { id: 'profile', label: 'Profile' },
-          { id: 'account', label: 'Account' },
-          { id: 'keys', label: 'SSH and GPG keys' },
-        ]}
-      />
-      {tab === 'app' && <App />}
-      {tab === 'profile' && <ProfileForm />}
-      {tab === 'account' && <Account />}
-      {tab === 'keys' && <Keys />}
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings">
+          {tabs.map(([id, label]) => (
+            <Link key={id} to={id === 'app' ? '?' : `?tab=${id}`} className={`side-link ${tab === id ? 'active' : ''}`}>
+              <span className="side-label">{label}</span>
+            </Link>
+          ))}
+        </nav>
+        <div className="stack">
+          {tab === 'app' && <App />}
+          {tab === 'profile' && <ProfileForm />}
+          {tab === 'account' && <Account />}
+          {tab === 'keys' && <Keys />}
+        </div>
+      </div>
     </div>
   );
 }

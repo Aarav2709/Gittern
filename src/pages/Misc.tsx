@@ -427,9 +427,15 @@ export function Notifications() {
           <CheckIcon /> Mark all as read
         </button>
       </div>
-      <ListState q={q} count={items.length} empty="All caught up">
-        No {all ? '' : 'unread '}notifications{reason ? ' for this filter' : ''}.
-      </ListState>
+      {!q.isLoading && !q.error && items.length === 0 ? (
+        <div className="card">
+          <Empty title="All caught up" icon={<CheckIcon size={22} />}>
+            No {all ? '' : 'unread '}notifications{reason ? ' for this filter' : ''}. New ones show up here and as desktop notifications.
+          </Empty>
+        </div>
+      ) : (
+        <ListState q={q} count={items.length} empty="" />
+      )}
       {[...groups].map(([repo, list]) => (
         <section key={repo}>
           <div className="group-head">
@@ -456,6 +462,7 @@ export function Notifications() {
                   </span>
                   <div className="row-main">
                     <button className="row-title link-btn" onClick={stop(() => open(n))}>
+                      {n.unread && <span className="unread-dot" aria-label="Unread" />}
                       {n.subject.title}
                     </button>
                     <div className="meta">
@@ -721,6 +728,8 @@ export function Login({ api, error }: { api: SignInApi; error?: string }) {
     }
   };
   const effectiveHost = (enterprise && host.trim()) || 'github.com';
+  const [manual, setManual] = useState(false);
+  const browserFirst = api.deviceFlow && !manual && !enterprise;
   return (
     <div className="login">
       <form
@@ -734,28 +743,43 @@ export function Login({ api, error }: { api: SignInApi; error?: string }) {
         <h1>Sign in to Gittern</h1>
         {isTauri ? (
           <>
-            {api.deviceFlow && !enterprise && (
+            {browserFirst && (
               <>
+                <p className="muted">Approve Gittern in your browser and you're in. Nothing to copy or configure.</p>
                 <DeviceFlow api={api} />
-                <span className="muted small">or use a token</span>
+                <button type="button" className="btn block" disabled={busy} onClick={() => attempt(api.withAmbient)}>
+                  Use my GitHub CLI session
+                </button>
+                <button type="button" className="link-btn small" onClick={() => setManual(true)}>
+                  Use a token or GitHub Enterprise instead
+                </button>
               </>
             )}
-            <p className="muted">Paste a personal access token. It's stored in your system keyring and only ever sent to {effectiveHost}.</p>
-            {enterprise && <input className="input" placeholder="github.example.com" value={host} onChange={(e) => setHost(e.target.value)} aria-label="GitHub Enterprise host" />}
-            <input className="input" type="password" autoFocus placeholder="ghp_… or github_pat_…" value={token} onChange={(e) => setToken(e.target.value)} aria-label="Personal access token" />
-            <button className="btn primary block" disabled={!token.trim() || busy || (enterprise && !host.trim())}>
-              {busy ? 'Checking…' : 'Sign in'}
-            </button>
-            <button type="button" className="btn block" disabled={busy} onClick={() => attempt(api.withAmbient)}>
-              Use my GitHub CLI session
-            </button>
-            {/* the global link handler lives in the signed-in shell, so these open by hand */}
-            <button type="button" className="link-btn small" onClick={() => openExternal(tokenUrl(effectiveHost))}>
-              Create a token on {effectiveHost} →
-            </button>
-            <button type="button" className="link-btn small" onClick={() => setEnterprise((v) => !v)}>
-              {enterprise ? 'Use github.com instead' : 'Use GitHub Enterprise Server'}
-            </button>
+            {!browserFirst && (
+              <>
+                <p className="muted">Paste a personal access token. It's stored in your system keyring and only ever sent to {effectiveHost}.</p>
+                {enterprise && <input className="input" placeholder="github.example.com" value={host} onChange={(e) => setHost(e.target.value)} aria-label="GitHub Enterprise host" />}
+                <input className="input" type="password" autoFocus placeholder="ghp_… or github_pat_…" value={token} onChange={(e) => setToken(e.target.value)} aria-label="Personal access token" />
+                <button className="btn primary block" disabled={!token.trim() || busy || (enterprise && !host.trim())}>
+                  {busy ? 'Checking…' : 'Sign in'}
+                </button>
+                <button type="button" className="btn block" disabled={busy} onClick={() => attempt(api.withAmbient)}>
+                  Use my GitHub CLI session
+                </button>
+                {/* the global link handler lives in the signed-in shell, so these open by hand */}
+                <button type="button" className="link-btn small" onClick={() => openExternal(tokenUrl(effectiveHost))}>
+                  Create a token on {effectiveHost} →
+                </button>
+                <button type="button" className="link-btn small" onClick={() => setEnterprise((v) => !v)}>
+                  {enterprise ? 'Use github.com instead' : 'Use GitHub Enterprise Server'}
+                </button>
+                {api.deviceFlow && (
+                  <button type="button" className="link-btn small" onClick={() => (setManual(false), setEnterprise(false))}>
+                    Sign in with your browser instead
+                  </button>
+                )}
+              </>
+            )}
           </>
         ) : (
           <p className="muted">

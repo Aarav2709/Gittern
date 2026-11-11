@@ -5,6 +5,8 @@ import {
   CodeReviewIcon,
   CodeSquareIcon,
   CommentDiscussionIcon,
+  DeviceDesktopIcon,
+  MarkGithubIcon,
   FileIcon,
   GearIcon,
   GitCommitIcon,
@@ -85,6 +87,7 @@ const TOP_PAGES: Record<string, string> = {
   explore: 'Explore',
   settings: 'Settings',
   gists: 'Gists',
+  local: 'Desktop',
 };
 
 // label + icon for a tab, derived from its route alone
@@ -103,6 +106,7 @@ function describeTab(path: string): { title: string; icon: ReactNode } {
       new: <PlusIcon size={14} />,
       explore: <TelescopeIcon size={14} />,
       settings: <GearIcon size={14} />,
+      local: <DeviceDesktopIcon size={14} />,
     }[seg[0]];
     return { title: seg[0] === 'search' && q ? q : TOP_PAGES[seg[0]], icon };
   }
@@ -375,7 +379,7 @@ export function Shell() {
             <SyncIcon />
           </button>
         </header>
-        <main ref={mainRef}>
+        <main ref={mainRef} className={loc.pathname === '/local' ? 'flush' : undefined}>
           <PageBoundary key={loc.pathname + loc.search}>
             <Outlet />
           </PageBoundary>
@@ -440,18 +444,26 @@ function Sidebar({ here, openPalette, showHelp }: { here: string; openPalette: (
   const update = useUpdate();
   const rate = useRate();
   const favorites = useRepoList('favorites');
-  const recents = useRepoList('recents');
   const repos = useGh<Repo[]>(MY_REPOS);
   const [filter, setFilter] = useState('');
   const [more, setMore] = useState(false);
+  const local = here.startsWith('/local');
   const shownRepos = (repos.data ?? []).filter((r) => r.full_name.toLowerCase().includes(filter.toLowerCase()));
-  const pinnedNames = new Set(favorites.map((f) => f.full_name));
 
   return (
     <aside className="sidebar" aria-label="Navigation">
       <div className="side-brand">
         <Logo size={20} />
         <span>Gittern</span>
+        <span className="spacer" />
+        <div className="mode-switch" role="group" aria-label="Mode">
+          <Link to="/" className={local ? '' : 'on'} title="GitHub" aria-label="GitHub mode" aria-current={local ? undefined : 'true'}>
+            <MarkGithubIcon size={14} />
+          </Link>
+          <Link to="/local" className={local ? 'on' : ''} title="Desktop: work on local repositories" aria-label="Desktop mode" aria-current={local ? 'true' : undefined}>
+            <DeviceDesktopIcon size={14} />
+          </Link>
+        </div>
       </div>
       <nav className="side-group">
         <button className="side-link" onClick={openPalette}>
@@ -482,7 +494,6 @@ function Sidebar({ here, openPalette, showHelp }: { here: string; openPalette: (
         <SideLink to="/issues?filter=mentions" icon={<MentionIcon />} label="Mentioned" here={here} />
       </nav>
       <RepoLinks title="Pinned" repos={favorites} here={here} />
-      <RepoLinks title="Recent" repos={recents.filter((r) => !pinnedNames.has(r.full_name)).slice(0, 4)} here={here} />
       <div className="side-group">
         <div className="side-heading">
           Repositories
@@ -614,6 +625,7 @@ function Palette({ onClose, repoBase, showHelp }: { onClose: () => void; repoBas
       cmd('Home', '/', <HomeIcon />),
       cmd('Inbox', '/notifications', <BellIcon />),
       cmd('Explore', '/explore', <TelescopeIcon />),
+      cmd('Desktop mode: local repositories', '/local', <DeviceDesktopIcon />),
       cmd('Your profile', `/${viewer.login}`, <PersonIcon />),
       cmd('Your gists', '/gists', <CodeSquareIcon />),
       cmd('Your stars', `/${viewer.login}?tab=stars`),

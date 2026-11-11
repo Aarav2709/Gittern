@@ -114,11 +114,17 @@ export function Home() {
     });
 
   return (
-    <div className="page">
+    <div className="page wide">
       <header className="page-head">
         <h1>Home</h1>
       </header>
-      <div className="code-layout">
+      <div className="work-grid">
+        <Work title="Waiting for your review" query="is:pr review-requested:@me" to="/pulls?filter=review-requested" />
+        <Work title="Your pull requests" query="is:pr author:@me" to="/pulls" />
+        <Work title="Assigned to you" query="is:issue assignee:@me" to="/issues?filter=assignee" />
+        <Work title="Mentioning you" query="mentions:@me" to="/issues?filter=mentions" />
+      </div>
+      <div className="stack">
         <div className="stack">
           <div className="toolbar">
             <Segmented
@@ -161,12 +167,6 @@ export function Home() {
           </section>
           <LoadMore q={feed} />
         </div>
-        <aside className="stack">
-          <Work title="Waiting for your review" query="is:pr review-requested:@me" to="/pulls?filter=review-requested" />
-          <Work title="Your pull requests" query="is:pr author:@me" to="/pulls" />
-          <Work title="Assigned to you" query="is:issue assignee:@me" to="/issues?filter=assignee" />
-          <Work title="Mentioning you" query="mentions:@me" to="/issues?filter=mentions" />
-        </aside>
       </div>
     </div>
   );

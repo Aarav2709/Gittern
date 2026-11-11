@@ -30,17 +30,15 @@ import {
   TriangleDownIcon,
 } from '@primer/octicons-react';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { Avatar, Dropdown, ErrorBox, Loading, Markdown, RepoGlyph, Segmented, Time } from '../components/ui';
 import { ACCEPT, gh, gql, invalidate, useGh, useGhAll, useGql } from '../lib/api';
 import { confirmDialog, toastError } from '../lib/feedback';
+import { langColor } from '../lib/langs';
 import type { Repo } from '../lib/types';
 import { toggleFavorite, useRepoList, visitRepo } from '../lib/store';
 import { compact, copyText, encPath, timeAgo } from '../lib/util';
-
-// monochrome ramp
-const tone = (i: number) => `color-mix(in srgb, var(--fg) ${Math.max(14, 92 - i * 20)}%, transparent)`;
 
 export const useRepo = () => useOutletContext<{ repo: Repo; counts: any }>();
 
@@ -128,6 +126,73 @@ function WatchButton({ repo }: { repo: Repo }) {
   );
 }
 
+interface RepoTab {
+  to: string;
+  label: string;
+  icon: ReactNode;
+  on: string[];
+  count?: number;
+}
+
+// tabs that don't fit the width move into a "more" menu
+function TabBar({ tabs, section }: { tabs: RepoTab[]; section: string }) {
+  const ref = useRef<HTMLElement>(null);
+  const [fit, setFit] = useState(tabs.length);
+  const widths = tabs.map((t) => `${t.label}${t.count ?? ''}`).join('|');
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const items = [...el.querySelectorAll<HTMLElement>('[data-tab]')];
+      const total = items.reduce((w, it) => w + it.offsetWidth + 8, -8);
+      if (total <= el.clientWidth) return setFit(items.length);
+      let used = 0;
+      let n = 0;
+      for (const it of items) {
+        used += it.offsetWidth + 8;
+        if (used > el.clientWidth - 96) break;
+        n++;
+      }
+      setFit(n);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [widths]);
+  const rest = tabs.slice(fit);
+  const restActive = rest.some((t) => t.on.includes(section));
+  return (
+    <nav className="tabs fit" aria-label="Repository" ref={ref}>
+      {tabs.map((t, i) => {
+        const on = t.on.includes(section);
+        return (
+          <Link key={t.label} data-tab to={t.to} className={`tab ${on ? 'active' : ''} ${i >= fit ? 'tab-hidden' : ''}`} aria-current={on ? 'page' : undefined} tabIndex={i >= fit ? -1 : undefined}>
+            {t.icon}
+            {t.label}
+            {!!t.count && <span className="count">{compact(t.count)}</span>}
+          </Link>
+        );
+      })}
+      {rest.length > 0 && (
+        <Dropdown align="right" className={`tab ${restActive ? 'active' : ''}`} trigger={<>More <TriangleDownIcon /></>}>
+          {(close) => (
+            <div className="menu" onClick={close}>
+              {rest.map((t) => (
+                <Link key={t.label} to={t.to}>
+                  {t.icon}
+                  {t.label}
+                  {!!t.count && <span className="count">{compact(t.count)}</span>}
+                </Link>
+              ))}
+            </div>
+          )}
+        </Dropdown>
+      )}
+    </nav>
+  );
+}
+
 export function RepoLayout() {
   const { owner, repo: name } = useParams();
   const section = useLocation().pathname.split('/')[3] ?? '';
@@ -144,7 +209,7 @@ export function RepoLayout() {
   if (q.error) return <ErrorBox error={q.error} retry={q.refetch} />;
   const base = `/${repo.full_name}`;
   const pinned = favorites.some((f) => f.full_name === repo.full_name);
-  const tabs = [
+  const tabs: RepoTab[] = [
     { to: base, label: 'Code', icon: <CodeIcon />, on: ['', 'tree', 'blob', 'blame', 'edit', 'new', 'branches', 'search'] },
     ...(repo.has_issues ? [{ to: `${base}/issues`, label: 'Issues', icon: <IssueOpenedIcon />, on: ['issues'], count: counts?.issues.totalCount }] : []),
     { to: `${base}/pulls`, label: 'Pull requests', icon: <GitPullRequestIcon />, on: ['pulls', 'pull', 'compare', 'labels', 'milestones', 'milestone'], count: counts?.pullRequests.totalCount },
@@ -189,15 +254,7 @@ export function RepoLayout() {
           forked from <Link to={`/${repo.parent.full_name}`}>{repo.parent.full_name}</Link>
         </div>
       )}
-      <nav className="tabs" aria-label="Repository">
-        {tabs.map((t) => (
-          <Link key={t.label} to={t.to} className={`tab ${t.on.includes(section) ? 'active' : ''}`} aria-current={t.on.includes(section) ? 'page' : undefined}>
-            {t.icon}
-            {t.label}
-            {!!t.count && <span className="count">{compact(t.count)}</span>}
-          </Link>
-        ))}
-      </nav>
+      <TabBar tabs={tabs} section={section} />
       <Outlet context={{ repo, counts }} />
     </div>
   );
@@ -321,6 +378,9 @@ function CloneMenu({ repo }: { repo: Repo }) {
               </button>
             </div>
           ))}
+          <Link className="btn block" to={`/local?clone=${encodeURIComponent(repo.full_name)}`}>
+            Open in Desktop mode
+          </Link>
           <a className="small" href={`${repo.html_url}/archive/refs/heads/${repo.default_branch}.zip`} data-external>
             Download ZIP
           </a>
@@ -640,14 +700,14 @@ function About({ repo, counts }: { repo: Repo; counts: any }) {
         <section>
           <h3>Languages</h3>
           <div className="lang-bar">
-            {entries.map(([name, n], i) => (
-              <span key={name} style={{ width: `${(n / total) * 100}%`, background: tone(i) }} title={name} />
+            {entries.map(([name, n]) => (
+              <span key={name} style={{ width: `${(n / total) * 100}%`, background: langColor(name) }} title={name} />
             ))}
           </div>
           <div className="lang-legend">
-            {entries.slice(0, 8).map(([name, n], i) => (
+            {entries.slice(0, 8).map(([name, n]) => (
               <span key={name} className="meta-item">
-                <span className="lang-dot" style={{ background: tone(i) }} />
+                <span className="lang-dot" style={{ background: langColor(name) }} />
                 <strong>{name}</strong> <span className="muted">{((n / total) * 100).toFixed(1)}%</span>
               </span>
             ))}
