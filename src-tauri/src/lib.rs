@@ -135,14 +135,14 @@ fn client_id() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-// inline video hangs webkitgtk when gstreamer lacks its audio or h264 plugins
+// inline video needs gstreamer's demuxer, audio sink and an h264 decoder
 #[tauri::command(async)]
 fn media_support() -> bool {
     if !cfg!(target_os = "linux") {
         return true;
     }
     let has = |el: &str| Command::new("gst-inspect-1.0").args(["--exists", el]).status().map(|s| s.success()).unwrap_or(false);
-    has("playbin") && has("autoaudiosink") && ["avdec_h264", "openh264dec", "vah264dec", "vaapih264dec"].iter().any(|d| has(d))
+    has("playbin") && has("autoaudiosink") && has("qtdemux") && ["avdec_h264", "openh264dec", "vah264dec", "vaapih264dec"].iter().any(|d| has(d))
 }
 
 // token lookup order
