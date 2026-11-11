@@ -3,6 +3,7 @@ import {
   CheckIcon,
   CommentDiscussionIcon,
   DotFillIcon,
+  FileIcon,
   GitBranchIcon,
   GitCommitIcon,
   GitPullRequestIcon,
@@ -378,7 +379,7 @@ export function Notifications() {
 
 const TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=repo,read:org,notifications&description=Gittern';
 
-type SearchType = 'repositories' | 'issues' | 'pulls' | 'users';
+type SearchType = 'repositories' | 'code' | 'issues' | 'pulls' | 'users';
 
 export function Search() {
   const [sp, setSp] = useSearchParams();
@@ -390,6 +391,7 @@ export function Search() {
     issues: `/search/issues?q=${enc(query + ' is:issue')}&per_page=30`,
     pulls: `/search/issues?q=${enc(query + ' is:pr')}&per_page=30`,
     users: `/search/users?q=${enc(query)}&per_page=30`,
+    code: `/search/code?q=${enc(query)}&per_page=30`,
   }[type];
   const q = useGhPages<any>(query && path, { pick: (d) => d.items });
 
@@ -405,6 +407,7 @@ export function Search() {
           onChange={(t) => setSp({ q: query, type: t })}
           options={[
             { value: 'repositories', label: 'Repositories' },
+            { value: 'code', label: 'Code' },
             { value: 'issues', label: 'Issues' },
             { value: 'pulls', label: 'Pull requests' },
             { value: 'users', label: 'Users' },
@@ -420,6 +423,20 @@ export function Search() {
           {q.items.map((it) =>
             type === 'repositories' ? (
               <RepoRow key={it.id} repo={it} showOwner />
+            ) : type === 'code' ? (
+              <div key={it.sha + it.repository.full_name + it.path} className="row">
+                <span className="state-icon">
+                  <FileIcon />
+                </span>
+                <div className="row-main">
+                  <div className="row-title">
+                    <a href={it.html_url}>{it.path}</a>
+                  </div>
+                  <div className="meta">
+                    <Link to={`/${it.repository.full_name}`}>{it.repository.full_name}</Link>
+                  </div>
+                </div>
+              </div>
             ) : type === 'users' ? (
               <div key={it.id} className="row">
                 <Avatar user={it} size={32} />

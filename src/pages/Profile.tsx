@@ -89,7 +89,7 @@ function Overview({ login, isUser }: { login: string; isUser: boolean }) {
     <div className="stack">
       {readme.data && (
         <section className="card pad-lg">
-          <Markdown html={readme.data} />
+          <Markdown html={readme.data} base={{ repo: `${login}/${login}`, ref: 'HEAD' }} />
         </section>
       )}
       <section>
@@ -145,6 +145,35 @@ function RepoList({ path }: { path: string }) {
       )}
       <LoadMore q={q} />
     </div>
+  );
+}
+
+function FollowButton({ login }: { login: string }) {
+  const path = `/user/following/${login}`;
+  const q = useGh(path);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const following = q.isSuccess;
+  const toggle = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await gh(path, { method: following ? 'DELETE' : 'PUT' });
+      await Promise.all([invalidate(path), invalidate(`/users/${login}`)]);
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      setError(status === 403 || status === 404 ? 'Your token lacks the "user:follow" scope.' : (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button className={`btn block ${following ? '' : 'primary'}`} disabled={busy || q.isLoading} onClick={toggle}>
+        {following ? 'Unfollow' : 'Follow'}
+      </button>
+      {error && <span className="small muted">{error}</span>}
+    </>
   );
 }
 
@@ -234,9 +263,12 @@ export function Profile() {
             </button>
           )
         ) : (
-          <a className="btn block" href={u.html_url} data-external>
-            Open on GitHub
-          </a>
+          <>
+            {isUser && <FollowButton login={u.login} />}
+            <a className="btn block" href={u.html_url} data-external>
+              Open on GitHub
+            </a>
+          </>
         )}
         <ul className="profile-facts">
           {isUser && (

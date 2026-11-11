@@ -60,6 +60,14 @@ function describe(e: any): Described | null {
           to: `${repo}/${p.issue.pull_request ? 'pull' : 'issues'}/${p.issue.number}`,
         },
       };
+    case 'PullRequestReviewEvent':
+    case 'PullRequestReviewCommentEvent': {
+      const pr = p.pull_request ?? {};
+      return {
+        verb: e.type === 'PullRequestReviewEvent' ? 'reviewed a pull request in' : 'commented on a pull request in',
+        detail: pr.number && { text: pr.title ? `${pr.title} #${pr.number}` : `#${pr.number}`, to: `${repo}/pull/${pr.number}` },
+      };
+    }
     case 'MemberEvent':
       return { verb: `added ${p.member?.login ?? 'a collaborator'} to` };
     default:
@@ -70,7 +78,14 @@ function describe(e: any): Described | null {
 export function Home() {
   const { viewer } = useAuth();
   const feed = useGhPages<any>(`/users/${viewer.login}/received_events?per_page=30`);
-  const events = feed.items.map((e) => ({ e, d: describe(e) })).filter((x) => x.d);
+  // GitHub emits one event per review comment; collapse runs of identical lines.
+  const events = feed.items
+    .map((e) => ({ e, d: describe(e) }))
+    .filter((x) => x.d)
+    .filter((x, i, all) => {
+      const prev = all[i - 1];
+      return !prev || prev.e.actor.login !== x.e.actor.login || prev.d!.verb !== x.d!.verb || prev.d!.detail?.to !== x.d!.detail?.to || prev.e.repo.name !== x.e.repo.name;
+    });
 
   return (
     <div className="page narrow">
