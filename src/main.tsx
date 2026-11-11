@@ -11,7 +11,7 @@ import { Home } from './pages/Home';
 import { GlobalIssues, IssueDetail, IssueList, NewIssue } from './pages/Issues';
 import { Actions, Branches, Login, Notifications, Releases, RunDetail, Search } from './pages/Misc';
 import { Profile } from './pages/Profile';
-import { Blob, Files, Overview, RepoLayout } from './pages/Repo';
+import { Blob, Code, RepoLayout } from './pages/Repo';
 import { activeTabPath } from './lib/store';
 import './styles.css';
 
@@ -35,8 +35,8 @@ createRoot(document.getElementById('root')!).render(
               <Route path="issues" element={<GlobalIssues kind="issue" />} />
               <Route path=":owner" element={<Profile />} />
               <Route path=":owner/:repo" element={<RepoLayout />}>
-                <Route index element={<Overview />} />
-                <Route path="tree/*" element={<Files />} />
+                <Route index element={<Code />} />
+                <Route path="tree/*" element={<Code />} />
                 <Route path="blob/*" element={<Blob />} />
                 <Route path="issues" element={<IssueList kind="issue" />} />
                 <Route path="pulls" element={<IssueList kind="pr" />} />
