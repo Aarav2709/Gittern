@@ -19,6 +19,8 @@ Sign-in: Gittern uses your GitHub CLI session (`gh auth login`) if there is one,
 `GITTERN_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` environment variable, or a personal access token
 you paste in, which is stored in the system keyring.
 
+Videos embedded in readmes and comments open in your browser instead of playing inline.
+
 ## Keys
 
 | Key | Action |
@@ -26,3 +28,4 @@ you paste in, which is stored in the system keyring.
 | `Ctrl K` or `/` | Search, jump to `owner/repo`, or paste a GitHub URL |
 | `Alt ←` / `Alt →` | Back / forward |
 | `Ctrl R` | Refresh data |
+| `T` | Go to file, on a repository's code page |
