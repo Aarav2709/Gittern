@@ -2,21 +2,28 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   BellIcon,
+  CodeIcon,
   GitPullRequestIcon,
+  HistoryIcon,
   HomeIcon,
   IssueOpenedIcon,
   LinkExternalIcon,
   PersonIcon,
+  PlayIcon,
   RepoIcon,
   SearchIcon,
+  StarIcon,
   SyncIcon,
+  TagIcon,
 } from '@primer/octicons-react';
 import { useIsFetching } from '@tanstack/react-query';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { queryClient, useGh } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { openExternal, routeFromUrl } from '../lib/util';
+import { type RepoRef, useRepoList } from '../lib/store';
+import { compact, openExternal, routeFromUrl } from '../lib/util';
+import { useRepoCounts } from '../pages/Repo';
 import { Avatar, Dropdown } from './ui';
 
 /** Theme-aware mark: solid tile in the text colour, glyph knocked out in the background colour. */
@@ -58,7 +65,7 @@ const PAGE_TITLES: Record<string, string> = {
 
 function Crumbs() {
   const seg = useLocation().pathname.split('/').filter(Boolean);
-  if (seg.length === 0) return <span className="crumb current">Dashboard</span>;
+  if (seg.length === 0) return <span className="crumb current">Home</span>;
   if (seg.length === 1 && PAGE_TITLES[seg[0]]) return <span className="crumb current">{PAGE_TITLES[seg[0]]}</span>;
   return (
     <>
@@ -78,7 +85,6 @@ function Crumbs() {
 }
 
 export function Shell() {
-  const { viewer, source, signOut } = useAuth();
   const navigate = useNavigate();
   const loc = useLocation();
   const navType = useNavigationType();
@@ -151,14 +157,25 @@ export function Shell() {
   const canGoBack = (window.history.state?.idx ?? 0) > 0;
 
   return (
-    <>
-      <header className="topbar">
-        <div className="nav-btns">
-          <button className="icon-btn" disabled={!canGoBack} onClick={() => navigate(-1)} title="Back (Alt+←)">
-            <ArrowLeftIcon />
-          </button>
-          <button className="icon-btn" onClick={() => navigate(1)} title="Forward (Alt+→)">
-            <ArrowRightIcon />
+    <div className="app">
+      <Sidebar unread={!!unread.data?.length} theme={theme} cycleTheme={cycleTheme} />
+      <div className="content">
+        <header className="topbar">
+          <div className="nav-btns">
+            <button className="icon-btn" disabled={!canGoBack} onClick={() => navigate(-1)} title="Back (Alt+←)">
+              <ArrowLeftIcon />
+            </button>
+            <button className="icon-btn" onClick={() => navigate(1)} title="Forward (Alt+→)">
+              <ArrowRightIcon />
+            </button>
+          </div>
+          <div className="crumbs">
+            <Crumbs />
+          </div>
+          <button className="search-trigger" onClick={() => setPalette(true)}>
+            <SearchIcon size={14} />
+            <span>Search or jump to…</span>
+            <kbd>Ctrl K</kbd>
           </button>
           <button
             className={`icon-btn ${fetching ? 'spinning' : ''}`}
@@ -167,59 +184,121 @@ export function Shell() {
           >
             <SyncIcon />
           </button>
-        </div>
-        <Link to="/" className="brand" title="Dashboard">
-          <Logo />
-        </Link>
-        <div className="crumbs">
-          <Crumbs />
-        </div>
-        <button className="search-trigger" onClick={() => setPalette(true)}>
-          <SearchIcon size={14} />
-          <span>Search or jump to…</span>
-          <kbd>Ctrl K</kbd>
-        </button>
-        <div className="topbar-right">
-          <Link className="icon-btn" to="/issues" title="Your issues">
-            <IssueOpenedIcon />
-          </Link>
-          <Link className="icon-btn" to="/pulls" title="Your pull requests">
-            <GitPullRequestIcon />
-          </Link>
-          <Link className="icon-btn" to="/notifications" title="Notifications">
-            <BellIcon />
-            {!!unread.data?.length && <span className="unread-dot" />}
-          </Link>
-          <Dropdown className="avatar-btn" align="right" trigger={<Avatar user={viewer} size={26} />}>
-            {(close) => (
-              <div className="menu" onClick={close}>
-                <div className="menu-head">
-                  <strong>{viewer.login}</strong>
-                  {viewer.name && <span>{viewer.name}</span>}
-                </div>
-                <Link to={`/${viewer.login}`}>Your profile</Link>
-                <Link to={`/${viewer.login}?tab=repositories`}>Your repositories</Link>
-                <Link to={`/${viewer.login}?tab=stars`}>Your stars</Link>
-                <hr />
-                <button onClick={cycleTheme}>Theme: {theme}</button>
-                <hr />
-                {source === 'keyring' ? (
-                  <button onClick={() => void signOut()}>Sign out</button>
-                ) : (
-                  <span className="menu-note">
-                    Signed in via {source === 'gh-cli' ? 'GitHub CLI' : 'environment token'}
-                  </span>
-                )}
-              </div>
-            )}
-          </Dropdown>
-        </div>
-      </header>
-      <main>
-        <Outlet />
-      </main>
+        </header>
+        <main>
+          <Outlet />
+        </main>
+      </div>
       {palette && <Palette onClose={() => setPalette(false)} />}
-    </>
+    </div>
+  );
+}
+
+function SideLink({ to, icon, label, active, trailing }: { to: string; icon: ReactNode; label: string; active: boolean; trailing?: ReactNode }) {
+  return (
+    <Link to={to} className={`side-link ${active ? 'active' : ''}`} title={label}>
+      {icon}
+      <span className="side-label">{label}</span>
+      {trailing}
+    </Link>
+  );
+}
+
+function RepoLinks({ title, repos, current }: { title: string; repos: RepoRef[]; current: string }) {
+  if (!repos.length) return null;
+  return (
+    <div className="side-group">
+      <div className="side-heading">{title}</div>
+      {repos.map((r) => (
+        <Link key={r.full_name} to={`/${r.full_name}`} title={r.full_name} className={`side-link ${current === r.full_name ? 'active' : ''}`}>
+          <img className="avatar square" src={`${r.avatar_url}${r.avatar_url.includes('?') ? '&' : '?'}s=40`} width={18} height={18} alt="" />
+          <span className="side-label">{r.full_name}</span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+/** Section links for the repository being viewed; replaces GitHub's horizontal tab strip. */
+function RepoNav({ owner, name, section }: { owner: string; name: string; section: string }) {
+  const repo = useGh<any>(`/repos/${owner}/${name}`);
+  const counts = useRepoCounts(owner, name, repo.isSuccess).data?.repository;
+  if (!repo.data) return null;
+  const base = `/${repo.data.full_name}`;
+  const count = (n?: number) => (n ? <span className="side-count">{compact(n)}</span> : null);
+  return (
+    <div className="side-group">
+      <div className="side-heading">{repo.data.name}</div>
+      <SideLink to={base} icon={<CodeIcon />} label="Code" active={['', 'tree', 'blob'].includes(section)} />
+      {repo.data.has_issues && (
+        <SideLink to={`${base}/issues`} icon={<IssueOpenedIcon />} label="Issues" active={section === 'issues'} trailing={count(counts?.issues.totalCount)} />
+      )}
+      <SideLink to={`${base}/pulls`} icon={<GitPullRequestIcon />} label="Pull requests" active={section === 'pulls' || section === 'pull'} trailing={count(counts?.pullRequests.totalCount)} />
+      <SideLink to={`${base}/commits`} icon={<HistoryIcon />} label="Commits" active={section === 'commits' || section === 'commit'} />
+      <SideLink to={`${base}/actions`} icon={<PlayIcon />} label="Actions" active={section === 'actions'} />
+      <SideLink to={`${base}/releases`} icon={<TagIcon />} label="Releases" active={section === 'releases'} trailing={count(counts?.releases.totalCount)} />
+    </div>
+  );
+}
+
+function Sidebar({ unread, theme, cycleTheme }: { unread: boolean; theme: Theme; cycleTheme: () => void }) {
+  const { viewer, source, signOut } = useAuth();
+  const loc = useLocation();
+  const seg = loc.pathname.split('/').filter(Boolean);
+  const inRepo = seg.length >= 2 && !PAGE_TITLES[seg[0]];
+  const favorites = useRepoList('favorites');
+  const recents = useRepoList('recents').filter((r) => !favorites.some((f) => f.full_name === r.full_name));
+  const current = inRepo ? `${seg[0]}/${seg[1]}` : '';
+  const onStars = seg[0] === viewer.login && loc.search.includes('tab=stars');
+
+  return (
+    <aside className="sidebar">
+      <Link to="/" className="brand" title="Home">
+        <Logo />
+        <span className="side-label">Gittern</span>
+      </Link>
+      <nav className="side-group">
+        <SideLink to="/" icon={<HomeIcon />} label="Home" active={seg.length === 0} />
+        <SideLink
+          to="/notifications"
+          icon={<BellIcon />}
+          label="Notifications"
+          active={seg[0] === 'notifications'}
+          trailing={unread ? <span className="unread-dot" /> : null}
+        />
+        <SideLink to="/issues" icon={<IssueOpenedIcon />} label="Issues" active={seg.length === 1 && seg[0] === 'issues'} />
+        <SideLink to="/pulls" icon={<GitPullRequestIcon />} label="Pull requests" active={seg.length === 1 && seg[0] === 'pulls'} />
+        <SideLink to={`/${viewer.login}?tab=stars`} icon={<StarIcon />} label="Stars" active={onStars} />
+      </nav>
+      {inRepo && <RepoNav owner={seg[0]} name={seg[1]} section={seg[2] ?? ''} />}
+      <RepoLinks title="Favorites" repos={favorites} current={current} />
+      <RepoLinks title="Recent" repos={recents} current={current} />
+      <span className="spacer" />
+      <Dropdown
+        className="side-link account"
+        align="up"
+        trigger={
+          <>
+            <Avatar user={viewer} size={22} />
+            <span className="side-label">{viewer.login}</span>
+          </>
+        }
+      >
+        {(close) => (
+          <div className="menu" onClick={close}>
+            <Link to={`/${viewer.login}`}>Your profile</Link>
+            <Link to={`/${viewer.login}?tab=repositories`}>Your repositories</Link>
+            <button onClick={cycleTheme}>Theme: {theme}</button>
+            <hr />
+            {source === 'keyring' ? (
+              <button onClick={() => void signOut()}>Sign out</button>
+            ) : (
+              <span className="menu-note">Signed in via {source === 'gh-cli' ? 'GitHub CLI' : 'environment token'}</span>
+            )}
+          </div>
+        )}
+      </Dropdown>
+    </aside>
   );
 }
 
@@ -262,7 +341,7 @@ function Palette({ onClose }: { onClose: () => void }) {
     });
     if (!q) {
       return [
-        { key: 'home', icon: <HomeIcon />, label: 'Dashboard', run: go('/') },
+        { key: 'home', icon: <HomeIcon />, label: 'Home', run: go('/') },
         { key: 'notif', icon: <BellIcon />, label: 'Notifications', run: go('/notifications') },
         { key: 'pulls', icon: <GitPullRequestIcon />, label: 'Your pull requests', run: go('/pulls') },
         { key: 'issues', icon: <IssueOpenedIcon />, label: 'Your issues', run: go('/issues') },
