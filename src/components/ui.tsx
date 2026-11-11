@@ -26,12 +26,17 @@ export function Loading({ label }: { label?: string }) {
   );
 }
 
-export function ErrorBox({ error }: { error: GhError | Error }) {
+export function ErrorBox({ error, retry }: { error: GhError | Error; retry?: () => unknown }) {
   const status = (error as GhError).status;
   return (
     <div className="empty">
       <h3>{status === 404 ? 'Not found' : status === 403 ? 'Not allowed' : 'Something went wrong'}</h3>
       <p>{error.message}</p>
+      {retry && status !== 404 && (
+        <button className="btn" onClick={() => retry()}>
+          Try again
+        </button>
+      )}
     </div>
   );
 }
@@ -74,8 +79,30 @@ export function Time({ iso }: { iso: string }) {
   return <time title={fullDate(iso)}>{timeAgo(iso)}</time>;
 }
 
+/**
+ * GitHub's HTML, sanitised. Inline <video>/<audio> become links: WebKitGTK hangs
+ * the whole view when GStreamer's audio plugins are missing, and they often are.
+ */
+function prepareHtml(html: string): string {
+  const clean = DOMPurify.sanitize(html, { FORBID_TAGS: ['style'] });
+  if (!/<(video|audio)\b/i.test(clean)) return clean;
+  const doc = new DOMParser().parseFromString(clean, 'text/html');
+  doc.querySelectorAll('video, audio').forEach((el) => {
+    const src = el.getAttribute('src') ?? el.querySelector('source')?.getAttribute('src');
+    const link = doc.createElement('a');
+    link.className = 'media-link';
+    link.textContent = `Play ${el.tagName.toLowerCase()} in browser`;
+    if (src) {
+      link.setAttribute('href', src);
+      link.setAttribute('data-external', '');
+    }
+    el.replaceWith(link);
+  });
+  return doc.body.innerHTML;
+}
+
 export function Markdown({ html }: { html: string }) {
-  const clean = useMemo(() => DOMPurify.sanitize(html, { FORBID_TAGS: ['style'] }), [html]);
+  const clean = useMemo(() => prepareHtml(html), [html]);
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: clean }} />;
 }
 
@@ -112,7 +139,7 @@ export function Dropdown({
 }: {
   trigger: ReactNode;
   children: (close: () => void) => ReactNode;
-  align?: 'left' | 'right';
+  align?: 'left' | 'right' | 'up';
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
