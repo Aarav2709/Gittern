@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "Gittern", "width": 1320, "height": 860, "minWidth": 880, "minHeight": 560 }
+      { "label": "main", "title": "Gittern", "width": 1320, "height": 860, "minWidth": 420, "minHeight": 360 }
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' https: data:; media-src 'none'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
