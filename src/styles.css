@@ -411,3 +411,8 @@ section > .section-title { margin-bottom: 10px; }
   .latest-commit .commit-msg, .latest-commit code { display: none; }
 }
 .mono { font-family: var(--mono); }
+select.input { appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%), linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%); background-position: calc(100% - 14px) 13px, calc(100% - 10px) 13px; background-size: 4px 4px; background-repeat: no-repeat; }
+.select { width: auto; min-width: 140px; }
+.name-input { width: 260px; }
+.code-editor { min-height: 55vh; font: 12px/20px var(--mono); tab-size: 4; white-space: pre; overflow: auto; }
+input[type='checkbox'], input[type='radio'] { accent-color: var(--fg); margin: 0; }
