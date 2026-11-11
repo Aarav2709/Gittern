@@ -27,7 +27,7 @@ import { queryClient, useGh } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { activateTab, closeTab, openTab, type RepoRef, syncActivePath, useRepoList, useTabs } from '../lib/store';
 import { openExternal, routeFromUrl } from '../lib/util';
-import { Avatar, Dropdown } from './ui';
+import { Avatar, Dropdown, RepoGlyph } from './ui';
 
 /** Theme-aware mark: solid tile in the text colour, glyph knocked out in the background colour. */
 export function Logo({ size = 22 }: { size?: number }) {
@@ -390,7 +390,7 @@ function Sidebar({ here, theme, cycleTheme, openPalette }: { here: string; theme
             title={r.full_name}
             className={`side-link ${here === `/${r.full_name}` || here.startsWith(`/${r.full_name}/`) ? 'active' : ''}`}
           >
-            <img className="avatar square" src={`${r.owner.avatar_url}&s=40`} width={16} height={16} alt="" />
+            <RepoGlyph repo={r} />
             <span className="side-label">{r.full_name}</span>
           </Link>
         ))}
