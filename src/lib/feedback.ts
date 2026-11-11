@@ -13,7 +13,9 @@ export interface ConfirmRequest {
   danger?: boolean;
   // must be typed to unlock the confirm button
   typeToConfirm?: string;
-  resolve: (ok: boolean) => void;
+  // asks for a value instead of a yes or no
+  input?: { label: string; initial?: string; multiline?: boolean; options?: { value: string; label: string }[] };
+  resolve: (ok: boolean, value?: string) => void;
 }
 
 let toasts: Toast[] = [];
@@ -49,8 +51,18 @@ export function confirmDialog(req: Omit<ConfirmRequest, 'resolve'>): Promise<boo
   });
 }
 
-export function settleConfirm(ok: boolean) {
-  pending?.resolve(ok);
+// asks for one value; null when cancelled
+export function promptDialog(req: Omit<ConfirmRequest, 'resolve' | 'input'> & { label: string; initial?: string; multiline?: boolean; options?: { value: string; label: string }[] }): Promise<string | null> {
+  const { label, initial, multiline, options, ...rest } = req;
+  return new Promise((resolve) => {
+    pending?.resolve(false);
+    pending = { ...rest, input: { label, initial, multiline, options }, resolve: (ok, value) => resolve(ok ? (value ?? '').trim() || null : null) };
+    emit();
+  });
+}
+
+export function settleConfirm(ok: boolean, value?: string) {
+  pending?.resolve(ok, value);
   pending = null;
   emit();
 }

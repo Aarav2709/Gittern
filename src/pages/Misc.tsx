@@ -8,6 +8,7 @@ import {
   GitCommitIcon,
   GitPullRequestIcon,
   IssueOpenedIcon,
+  KebabHorizontalIcon,
   PackageIcon,
   StopIcon,
   TagIcon,
@@ -18,10 +19,10 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MarkdownEditor } from '../components/Editor';
 import { Logo } from '../components/Shell';
-import { Avatar, CopyButton, Dropdown, Empty, ErrorBox, Field, ListState, Loading, LoadMore, Markdown, RepoRow, Segmented, Time, UserLink } from '../components/ui';
+import { Avatar, CopyButton, CopyMenuItem, Dropdown, Empty, ErrorBox, Field, ListState, Loading, LoadMore, Markdown, RepoRow, Segmented, Time, UserLink } from '../components/ui';
 import { ACCEPT, gh, invalidate, isTauri, useGh, useGhPages } from '../lib/api';
 import type { DeviceCode, SignInApi } from '../lib/auth';
-import { confirmDialog, useAction, useDraft } from '../lib/feedback';
+import { confirmDialog, promptDialog, useAction, useDraft } from '../lib/feedback';
 import type { Branch, Issue, NotificationThread, Release, Repo, User } from '../lib/types';
 import { compact, formatBytes, openExternal, plural, routeFromUrl } from '../lib/util';
 import { IssueRow, QueryBox } from './Issues';
@@ -46,6 +47,18 @@ export function Branches() {
   const remove = async (b: Branch) => {
     if (!(await confirmDialog({ title: `Delete ${b.name}?`, body: 'Commits only on this branch become unreachable.', confirmLabel: 'Delete branch', danger: true }))) return;
     void run(async () => (await gh(`${api}/git/refs/heads/${b.name.split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE' }), await invalidate(`${api}/branches`)), `Deleted ${b.name}`);
+  };
+  const rename = async (b: Branch) => {
+    const to = await promptDialog({ title: `Rename ${b.name}`, label: 'New name', initial: b.name, confirmLabel: 'Rename' });
+    if (!to || to === b.name) return;
+    void run(async () => {
+      await gh(`${api}/branches/${encodeURIComponent(b.name)}/rename`, { method: 'POST', body: { new_name: to } });
+      await Promise.all([invalidate(`${api}/branches`), invalidate(api)]);
+    }, `Renamed to ${to}`);
+  };
+  const makeDefault = async (b: Branch) => {
+    if (!(await confirmDialog({ title: `Make ${b.name} the default branch?`, body: 'New pull requests and clones will use it.', confirmLabel: 'Change default' }))) return;
+    void run(async () => (await gh(api, { method: 'PATCH', body: { default_branch: b.name } }), await invalidate(api)), `${b.name} is now the default`);
   };
   const shown = q.items.filter((b) => b.name.toLowerCase().includes(filter.toLowerCase()));
   return (
@@ -104,6 +117,17 @@ export function Branches() {
                 <TrashIcon />
               </button>
             )}
+            {canPush && (
+              <Dropdown align="right" className="icon-btn" title="More" trigger={<KebabHorizontalIcon />}>
+                {(close) => (
+                  <div className="menu" onClick={close}>
+                    <button onClick={() => rename(b)}>Rename</button>
+                    {repo.permissions?.admin && b.name !== repo.default_branch && <button onClick={() => makeDefault(b)}>Make default</button>}
+                    <CopyMenuItem text={b.name} label="Copy name" />
+                  </div>
+                )}
+              </Dropdown>
+            )}
           </div>
         ))}
       </div>
@@ -134,15 +158,72 @@ function ReleaseNav({ at }: { at: 'releases' | 'tags' }) {
   );
 }
 
+// ref path with each segment encoded
+const refPath = (name: string) => name.split('/').map(encodeURIComponent).join('/');
+
 export function Tags() {
   const { repo } = useRepo();
-  const q = useGhPages<{ name: string; commit: { sha: string }; zipball_url: string }>(`/repos/${repo.full_name}/tags?per_page=50`);
+  const api = `/repos/${repo.full_name}`;
+  const q = useGhPages<{ name: string; commit: { sha: string }; zipball_url: string }>(`${api}/tags?per_page=50`);
+  const [filter, setFilter] = useState('');
+  const [name, setName] = useState('');
+  const [from, setFrom] = useState(repo.default_branch);
+  const [message, setMessage] = useState('');
+  const { busy, run } = useAction();
+  const canPush = !!repo.permissions?.push;
+  const create = () =>
+    run(async () => {
+      const tag = name.trim();
+      const head = await gh<{ sha: string }>(`${api}/commits/${encodeURIComponent(from.trim())}`);
+      let sha = head.sha;
+      // a message makes an annotated tag object
+      if (message.trim()) sha = (await gh<{ sha: string }>(`${api}/git/tags`, { method: 'POST', body: { tag, message, object: head.sha, type: 'commit' } })).sha;
+      await gh(`${api}/git/refs`, { method: 'POST', body: { ref: `refs/tags/${tag}`, sha } });
+      setName('');
+      setMessage('');
+      await invalidate(`${api}/tags`);
+    }, `Created ${name.trim()}`);
+  const remove = async (tag: string) => {
+    if (!(await confirmDialog({ title: `Delete tag ${tag}?`, body: 'A release on this tag turns into a draft.', confirmLabel: 'Delete tag', danger: true }))) return;
+    void run(async () => (await gh(`${api}/git/refs/tags/${refPath(tag)}`, { method: 'DELETE' }), await invalidate(`${api}/tags`), await invalidate(`${api}/releases`)), `Deleted ${tag}`);
+  };
+  const shown = q.items.filter((t) => t.name.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div className="stack">
       <ReleaseNav at="tags" />
+      <div className="toolbar">
+        <input className="input name-input" placeholder="Filter tags…" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter tags" />
+        <span className="spacer" />
+        {canPush && (
+          <Dropdown align="right" className="btn" trigger="New tag">
+            {() => (
+              <form
+                className="menu wide pad"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void create();
+                }}
+              >
+                <Field label="Tag name">
+                  <input className="input" autoFocus placeholder="v1.0.0" value={name} onChange={(e) => setName(e.target.value)} />
+                </Field>
+                <Field label="From branch, tag or commit">
+                  <input className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
+                </Field>
+                <Field label="Message" hint="Leave empty for a lightweight tag.">
+                  <textarea className="input" rows={3} value={message} onChange={(e) => setMessage(e.target.value)} />
+                </Field>
+                <button className="btn primary" disabled={busy || !name.trim() || !from.trim()}>
+                  Create tag
+                </button>
+              </form>
+            )}
+          </Dropdown>
+        )}
+      </div>
       <div className="card">
-        <ListState q={q} count={q.items.length} empty="No tags" />
-        {q.items.map((t) => (
+        <ListState q={q} count={shown.length} empty={filter ? 'No tags match' : 'No tags'} />
+        {shown.map((t) => (
           <div key={t.name} className="row compact">
             <span className="state-icon">
               <TagIcon />
@@ -161,6 +242,11 @@ export function Tags() {
             <a className="btn sm" href={`${repo.html_url}/archive/refs/tags/${t.name}.zip`} data-external>
               zip
             </a>
+            {canPush && (
+              <button className="icon-btn" title="Delete tag" aria-label={`Delete ${t.name}`} disabled={busy} onClick={() => remove(t.name)}>
+                <TrashIcon />
+              </button>
+            )}
           </div>
         ))}
       </div>

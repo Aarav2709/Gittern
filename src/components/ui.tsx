@@ -19,7 +19,7 @@ import DOMPurify from 'dompurify';
 import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { GhError } from '../lib/api';
-import { dismissToast, settleConfirm, useConfirmRequest, useToasts } from '../lib/feedback';
+import { dismissToast, settleConfirm, toast, useConfirmRequest, useToasts } from '../lib/feedback';
 import { langColor } from '../lib/langs';
 import { compact, copyText, fullDate, timeAgo } from '../lib/util';
 
@@ -418,6 +418,20 @@ export function CopyButton({ text, label, className = 'btn sm' }: { text: string
   );
 }
 
+// menu row that copies text
+export function CopyMenuItem({ text, label = 'Copy' }: { text: string; label?: string }) {
+  return (
+    <button
+      onClick={() => {
+        void copyText(text);
+        toast('Copied');
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -455,19 +469,42 @@ export function Toasts() {
 export function ConfirmHost() {
   const req = useConfirmRequest();
   const [typed, setTyped] = useState('');
-  useEffect(() => setTyped(''), [req]);
+  const [value, setValue] = useState('');
+  useEffect(() => {
+    setTyped('');
+    setValue(req?.input?.initial ?? req?.input?.options?.[0]?.value ?? '');
+  }, [req]);
   if (!req) return null;
-  const locked = !!req.typeToConfirm && typed !== req.typeToConfirm;
+  const locked = (!!req.typeToConfirm && typed !== req.typeToConfirm) || (!!req.input && !req.input.options && !value.trim());
+  const input = req.input;
   return (
     <Modal title={req.title} onClose={() => settleConfirm(false)}>
       <form
         className="dialog-body"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!locked) settleConfirm(true);
+          if (!locked) settleConfirm(true, value);
         }}
       >
         {req.body && <p className="muted">{req.body}</p>}
+        {input && (
+          <label className="field">
+            <span>{input.label}</span>
+            {input.options ? (
+              <select className="input" autoFocus value={value} onChange={(e) => setValue(e.target.value)}>
+                {input.options.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            ) : input.multiline ? (
+              <textarea className="input" rows={5} autoFocus value={value} onChange={(e) => setValue(e.target.value)} />
+            ) : (
+              <input className="input" autoFocus value={value} onChange={(e) => setValue(e.target.value)} onFocus={(e) => e.target.select()} />
+            )}
+          </label>
+        )}
         {req.typeToConfirm && (
           <label className="field">
             <span>
@@ -481,7 +518,7 @@ export function ConfirmHost() {
           <button type="button" className="btn" onClick={() => settleConfirm(false)}>
             Cancel
           </button>
-          <button className={`btn ${req.danger ? 'danger' : 'primary'}`} disabled={locked} autoFocus={!req.typeToConfirm}>
+          <button className={`btn ${req.danger ? 'danger' : 'primary'}`} disabled={locked} autoFocus={!req.typeToConfirm && !input}>
             {req.confirmLabel ?? 'Confirm'}
           </button>
         </div>
