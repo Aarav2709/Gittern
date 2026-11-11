@@ -521,8 +521,10 @@ function About({ repo, counts }: { repo: any; counts: any }) {
   const langs = useGh<Record<string, number>>(`${api}/languages`);
   const contributors = useGh<any[]>(`${api}/contributors?per_page=14`);
   const [editing, setEditing] = useState(false);
-  const entries = Object.entries(langs.data ?? {});
-  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  const all = Object.entries(langs.data ?? {});
+  const total = all.reduce((sum, [, n]) => sum + n, 0);
+  // Languages under 0.1% only add noise to the bar and legend.
+  const entries = all.filter(([, n]) => n / total >= 0.001);
   const latest = counts?.latestRelease;
   return (
     <aside className="about">
