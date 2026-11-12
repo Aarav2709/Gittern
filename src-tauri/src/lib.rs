@@ -417,7 +417,30 @@ async fn device_poll(state: State<'_, AppState>, device_code: String) -> Result<
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// apps started from finder or a desktop launcher miss the shell's PATH
+fn widen_path() {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut extra: Vec<PathBuf> = vec![];
+    if cfg!(target_os = "macos") {
+        extra.extend(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from));
+    }
+    if cfg!(unix) {
+        if let Some(h) = &home {
+            extra.extend([h.join(".local/bin"), h.join("bin"), h.join(".cargo/bin")]);
+        }
+    }
+    let current: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let missing: Vec<PathBuf> = extra.into_iter().filter(|d| d.is_dir() && !current.contains(d)).collect();
+    if missing.is_empty() {
+        return;
+    }
+    if let Ok(joined) = std::env::join_paths(current.into_iter().chain(missing)) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
 pub fn run() {
+    widen_path();
     let http = reqwest::Client::builder()
         .user_agent(concat!("Gittern/", env!("CARGO_PKG_VERSION")))
         .build()
