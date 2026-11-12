@@ -553,6 +553,7 @@ pub fn run() {
             git::git_delete_branch,
             git::git_rename_branch,
             git::git_commit_action,
+            git::find_local_clone,
             apps::list_editors,
             apps::add_editor,
             apps::remove_editor,

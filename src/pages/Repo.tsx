@@ -6,6 +6,7 @@ import {
   TableIcon,
   CheckIcon,
   CodeIcon,
+  DeviceDesktopIcon,
   CopyIcon,
   EyeIcon,
   FileDirectoryFillIcon,
@@ -33,11 +34,12 @@ import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { Avatar, Dropdown, ErrorBox, Loading, Markdown, RepoGlyph, Segmented, Time } from '../components/ui';
-import { ACCEPT, gh, gql, invalidate, useGh, useGhAll, useGql } from '../lib/api';
+import { invoke } from '@tauri-apps/api/core';
+import { ACCEPT, gh, gql, invalidate, isTauri, useGh, useGhAll, useGql } from '../lib/api';
 import { confirmDialog, promptDialog, toast, toastError } from '../lib/feedback';
 import { langColor } from '../lib/langs';
 import type { Repo } from '../lib/types';
-import { toggleFavorite, useRepoList, visitRepo } from '../lib/store';
+import { toggleFavorite, usePref, useRepoList, visitRepo } from '../lib/store';
 import { compact, copyText, encPath, timeAgo } from '../lib/util';
 
 export const useRepo = () => useOutletContext<{ repo: Repo; counts: any }>();
@@ -391,6 +393,47 @@ export function PathCrumbs({ repo, gitRef, path }: { repo: Repo; gitRef: string;
   );
 }
 
+// opens the local clone when there is one, otherwise offers to clone
+function LocalActions({ repo, close }: { repo: Repo; close: () => void }) {
+  const navigate = useNavigate();
+  const [, setLocal] = usePref('local-repo', '');
+  const [editor] = usePref('editor', '');
+  const clone = useQuery({ queryKey: ['local', 'find_local_clone', repo.full_name], queryFn: () => invoke<string | null>('find_local_clone', { fullName: repo.full_name }), enabled: isTauri });
+  if (!isTauri || !clone.data)
+    return (
+      <Link className="btn block" to={`/local?clone=${encodeURIComponent(repo.full_name)}`}>
+        <DeviceDesktopIcon /> {isTauri ? 'Clone in Desktop mode' : 'Open in Desktop mode'}
+      </Link>
+    );
+  const path = clone.data;
+  return (
+    <div className="clone-actions">
+      <button
+        className="btn"
+        onClick={() => {
+          setLocal(path);
+          close();
+          navigate('/local');
+        }}
+      >
+        <DeviceDesktopIcon /> Open local copy
+      </button>
+      <button
+        className="btn"
+        onClick={async () => {
+          close();
+          const editors = await invoke<{ id: string }[]>('list_editors').catch(() => []);
+          const pick = editors.find((e) => e.id === editor) ?? editors[0];
+          if (!pick) return toast('No editor found. Pick one in Desktop mode.', 'error');
+          await invoke('open_in_editor', { repo: path, editor: pick.id }).catch(toastError);
+        }}
+      >
+        <CodeIcon /> Open in editor
+      </button>
+    </div>
+  );
+}
+
 function CloneMenu({ repo, onFind, addTo }: { repo: Repo; onFind: () => void; addTo?: string }) {
   const [copied, setCopied] = useState('');
   const rows = [
@@ -437,9 +480,7 @@ function CloneMenu({ repo, onFind, addTo }: { repo: Repo; onFind: () => void; ad
               </button>
             </div>
           ))}
-          <Link className="btn block" to={`/local?clone=${encodeURIComponent(repo.full_name)}`}>
-            Open in Desktop mode
-          </Link>
+          <LocalActions repo={repo} close={close} />
           <a className="small" href={`${repo.html_url}/archive/refs/heads/${repo.default_branch}.zip`} data-external>
             Download ZIP
           </a>

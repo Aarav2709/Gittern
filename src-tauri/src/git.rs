@@ -524,6 +524,25 @@ pub fn git_undo(state: State<'_, AppState>, repo: String) -> Result<(), String> 
     git(&dir, &["reset", "--soft", "HEAD~1"]).map(|_| ())
 }
 
+// "owner/name" from an origin url on the signed-in host
+pub fn remote_slug(url: &str, host: &str) -> Option<String> {
+    let url = url.trim();
+    let rest = [format!("https://{host}/"), format!("git@{host}:"), format!("ssh://git@{host}/")].iter().find_map(|p| url.strip_prefix(p.as_str()).map(str::to_string))?;
+    let rest = rest.trim_end_matches('/').trim_end_matches(".git");
+    let mut parts = rest.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (parts.next().is_none() && !owner.is_empty() && !name.is_empty()).then(|| format!("{owner}/{name}").to_lowercase())
+}
+
+// the local clone of a github repository, if one was added
+#[tauri::command(async)]
+pub fn find_local_clone(state: State<'_, AppState>, full_name: String) -> Option<String> {
+    let host = state.host();
+    let want = full_name.to_lowercase();
+    let repos = state.settings.lock().unwrap().repos.clone();
+    repos.into_iter().filter(|p| Path::new(p).is_dir()).find(|p| remote_slug(&origin(Path::new(p)), &host).as_deref() == Some(want.as_str()))
+}
+
 #[tauri::command(async)]
 pub fn git_remote(state: State<'_, AppState>, repo: String) -> Result<String, String> {
     Ok(origin(&repo_dir(&state, &repo)?))
@@ -573,6 +592,14 @@ u UU N... 100644 100644 100644 100644 a b c both.rs\0\
         assert!(safe_clone_url("ext::sh -c evil").is_err());
         assert!(safe_clone_url("--upload-pack=evil").is_err());
         assert!(safe_clone_url("/tmp/local").is_err());
+    }
+
+    #[test]
+    fn reads_a_remote_slug() {
+        assert_eq!(remote_slug("https://github.com/Cli/Cli.git", "github.com").as_deref(), Some("cli/cli"));
+        assert_eq!(remote_slug("git@github.com:a/b", "github.com").as_deref(), Some("a/b"));
+        assert_eq!(remote_slug("https://gitlab.com/a/b", "github.com"), None);
+        assert_eq!(remote_slug("https://github.com/a/b/c", "github.com"), None);
     }
 
     #[test]
