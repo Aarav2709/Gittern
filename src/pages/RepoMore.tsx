@@ -9,6 +9,7 @@ import type { Issue, Label, Milestone, Repo, User } from '../lib/types';
 import { compact, plural } from '../lib/util';
 import { issueSearch } from './Home';
 import { IssueRow } from './Issues';
+import { ProjectBoard, RepoProjects } from './Project';
 import { useRepo } from './Repo';
 
 export function Labels() {
@@ -714,132 +715,15 @@ function AdvisoryList({ repo }: { repo: Repo }) {
   );
 }
 
-const PROJECTS_QUERY = `
-query($owner: String!, $name: String!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    projectsV2(first: 30, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
-      pageInfo { hasNextPage endCursor }
-      nodes { number title shortDescription closed updatedAt url items { totalCount } }
-    }
-  }
-}`;
-
-// projects need a scope the default github cli token doesn't have
-function ScopeHint({ error }: { error: Error }) {
-  if (!error.message.includes('read:project')) return <ErrorBox error={error} />;
-  return (
-    <Empty title="Projects need one more permission">
-      Your token lacks the read:project scope. With the GitHub CLI, run <code>gh auth refresh -s read:project</code> and restart Gittern.
-    </Empty>
-  );
-}
-
 export function Projects() {
   const { repo } = useRepo();
-  const q = useGqlPages<any>('projects', PROJECTS_QUERY, { owner: repo.owner.login, name: repo.name }, (d) => d.repository?.projectsV2);
-  if (q.error) return <ScopeHint error={q.error} />;
-  return (
-    <div className="stack">
-      <div className="card">
-        <ListState q={q} count={q.items.length} empty="No projects linked to this repository" />
-        {q.items.map((p) => (
-          <div key={p.number} className="row">
-            <span className="state-icon">
-              <TableIcon />
-            </span>
-            <div className="row-main">
-              <div className="row-title">
-                <Link to={`/${repo.full_name}/projects/${p.number}`}>{p.title}</Link>
-                {p.closed && <span className="badge">Closed</span>}
-              </div>
-              {p.shortDescription && <p className="row-desc">{p.shortDescription}</p>}
-              <div className="meta">
-                #{p.number} · {plural(p.items.totalCount, 'item')} · updated <Time iso={p.updatedAt} />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <LoadMore q={q} />
-    </div>
-  );
+  return <RepoProjects repo={repo} />;
 }
 
-const PROJECT_QUERY = `
-query($owner: String!, $name: String!, $number: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    projectV2(number: $number) {
-      title shortDescription url
-      items(first: 50, after: $after) {
-        totalCount
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          id
-          status: fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
-          content {
-            __typename
-            ... on Issue { number title state repository { nameWithOwner } assignees(first: 3) { nodes { login avatarUrl } } }
-            ... on PullRequest { number title state repository { nameWithOwner } assignees(first: 3) { nodes { login avatarUrl } } }
-            ... on DraftIssue { title }
-          }
-        }
-      }
-    }
-  }
-}`;
-
-// a project as a board grouped by its status field
 export function ProjectDetail() {
   const { repo } = useRepo();
   const { number } = useParams();
-  const q = useGqlPages<any>('project', PROJECT_QUERY, { owner: repo.owner.login, name: repo.name, number: Number(number) }, (d) => d.repository?.projectV2?.items);
-  const project = q.first?.repository?.projectV2;
-  if (q.isLoading) return <Loading />;
-  if (q.error) return <ScopeHint error={q.error} />;
-  if (!project) return <Empty title="Project not found" />;
-  const columns = new Map<string, any[]>();
-  for (const it of q.items) {
-    const key = it.status?.name ?? 'No status';
-    columns.set(key, [...(columns.get(key) ?? []), it]);
-  }
-  return (
-    <div className="stack">
-      <div className="toolbar">
-        <div>
-          <h2 className="title">{project.title}</h2>
-          {project.shortDescription && <p className="muted">{project.shortDescription}</p>}
-        </div>
-        <span className="spacer" />
-        <a className="btn" href={project.url} data-external>
-          Edit on GitHub
-        </a>
-      </div>
-      <div className="board">
-        {[...columns].map(([name, items]) => (
-          <section key={name} className="board-col">
-            <h3>
-              {name} <span className="count">{items.length}</span>
-            </h3>
-            {items.map((it) => {
-              const c = it.content;
-              const to = c?.number ? `/${c.repository.nameWithOwner}/${c.__typename === 'PullRequest' ? 'pull' : 'issues'}/${c.number}` : null;
-              return (
-                <div key={it.id} className="card board-card">
-                  {to ? <Link to={to}>{c.title}</Link> : <span>{c?.title ?? 'Private item'}</span>}
-                  <div className="meta">
-                    {c?.number ? `#${c.number} · ${c.state.toLowerCase()}` : 'Draft'}
-                    <span className="spacer" />
-                    {c?.assignees?.nodes.map((a: any) => <Avatar key={a.login} user={{ login: a.login, avatar_url: a.avatarUrl }} size={16} />)}
-                  </div>
-                </div>
-              );
-            })}
-          </section>
-        ))}
-      </div>
-      <LoadMore q={q} />
-    </div>
-  );
+  return <ProjectBoard owner={repo.owner.login} number={Number(number)} />;
 }
 
 export function Deployments() {

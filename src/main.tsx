@@ -19,6 +19,7 @@ import { Deployments, Insights, Labels, MilestoneDetail, Milestones, People, Pro
 import { Settings } from './pages/Settings';
 import { FileEditor, NewPull, NewRepo, RepoSettings } from './pages/Manage';
 import { Profile } from './pages/Profile';
+import { OwnerProjectPage } from './pages/Project';
 import { Blob } from './pages/Blob';
 import { Code, RepoLayout } from './pages/Repo';
 import { activeTabPath } from './lib/store';
@@ -50,6 +51,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="gists/new" element={<GistForm />} />
               <Route path="gist/:id" element={<GistDetail />} />
               <Route path="gist/:id/edit" element={<GistForm />} />
+              <Route path="project/:owner/:number" element={<OwnerProjectPage />} />
               <Route path=":owner" element={<Profile />} />
               <Route path=":owner/:repo" element={<RepoLayout />}>
                 <Route index element={<Code />} />

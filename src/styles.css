@@ -640,3 +640,11 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .asset-link { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .asset-add { align-self: flex-start; margin-top: 8px; }
 .status-row { grid-template-columns: 180px minmax(0, 1fr); }
+.board-card[draggable] { cursor: grab; }
+.board-add { margin-left: auto; }
+.project-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.table-scroll { overflow-x: auto; }
+.project-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.project-table th, .project-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-soft); text-align: left; white-space: nowrap; }
+.project-table th { color: var(--fg-muted); font-weight: 500; }
+.project-table td .input { min-width: 120px; height: 28px; }
