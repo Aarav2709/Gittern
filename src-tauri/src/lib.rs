@@ -139,6 +139,56 @@ fn client_id() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+// encrypts a value for github actions with the repository's public key
+#[tauri::command]
+fn seal_secret(key: String, value: String) -> Result<String, String> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let raw: [u8; 32] = b64.decode(key.trim()).map_err(|e| e.to_string())?.try_into().map_err(|_| "The public key has the wrong length".to_string())?;
+    let sealed = crypto_box::PublicKey::from(raw).seal(&mut crypto_box::aead::OsRng, value.as_bytes()).map_err(|_| "Could not encrypt the secret".to_string())?;
+    Ok(b64.encode(sealed))
+}
+
+// picks a file and uploads it as a release asset
+#[tauri::command]
+async fn upload_release_asset(app: tauri::AppHandle, state: State<'_, AppState>, repo: String, release: u64) -> Result<Option<serde_json::Value>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let valid = repo.split('/').count() == 2 && repo.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'));
+    if !valid {
+        return Err("Not a repository name".into());
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().set_title("Choose a file to attach").blocking_pick_file()).await.map_err(|e| e.to_string())?;
+    let Some(picked) = picked else { return Ok(None) };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("That file has no name")?;
+    let bytes = tokio_read(path).await?;
+    let host = state.host();
+    let base = if host == DEFAULT_HOST { "https://uploads.github.com".to_string() } else { format!("https://{host}/api/uploads") };
+    let token = state.token.lock().unwrap().clone().ok_or("Not signed in")?;
+    let res = state
+        .http
+        .post(format!("{base}/repos/{repo}/releases/{release}/assets"))
+        .query(&[("name", name.as_str())])
+        .bearer_auth(&token.value)
+        .header("Accept", "application/vnd.github+json")
+        .header("Content-Type", "application/octet-stream")
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+    let status = res.status();
+    let body: serde_json::Value = res.json().await.unwrap_or(serde_json::Value::Null);
+    if !status.is_success() {
+        let msg = body.get("message").and_then(|m| m.as_str()).unwrap_or("Upload failed");
+        return Err(format!("{msg} (HTTP {})", status.as_u16()));
+    }
+    Ok(Some(body))
+}
+
+async fn tokio_read(path: PathBuf) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || std::fs::read(&path)).await.map_err(|e| e.to_string())?.map_err(|e| format!("Could not read the file: {e}"))
+}
+
 // a child process that never flashes a console window on windows
 pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
@@ -480,6 +530,8 @@ pub fn run() {
             device_start,
             device_poll,
             media_support,
+            seal_secret,
+            upload_release_asset,
             git::local_repos,
             git::add_local_repo,
             git::remove_local_repo,
@@ -517,6 +569,17 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn seals_a_secret_github_can_open() {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let sk = crypto_box::SecretKey::generate(&mut crypto_box::aead::OsRng);
+        let sealed = super::seal_secret(b64.encode(sk.public_key().as_bytes()), "hunter2".into()).unwrap();
+        let opened = sk.unseal(&b64.decode(sealed).unwrap()).unwrap();
+        assert_eq!(opened, b"hunter2");
+        assert!(super::seal_secret("short".into(), "x".into()).is_err());
+    }
+
     use super::*;
 
     #[test]

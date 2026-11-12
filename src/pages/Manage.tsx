@@ -1,12 +1,13 @@
-import { AlertIcon, GearIcon, GitBranchIcon, GitCommitIcon, KeyIcon, LockIcon, PersonIcon, TrashIcon, WebhookIcon } from '@primer/octicons-react';
+import { invoke } from '@tauri-apps/api/core';
+import { AlertIcon, GearIcon, GitBranchIcon, GitCommitIcon, KeyIcon, LinkIcon, LockIcon, PersonIcon, RocketIcon, TrashIcon, WebhookIcon } from '@primer/octicons-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DiffFile } from '../components/Diff';
 import { MarkdownEditor } from '../components/Editor';
-import { Avatar, Empty, ErrorBox, Field, ListState, Loading, Switch, Time, useSubTab } from '../components/ui';
-import { ACCEPT, gh, invalidate, useGh, useGhAll } from '../lib/api';
+import { Avatar, Empty, ErrorBox, Field, ListState, Loading, Modal, Switch, Time, useSubTab } from '../components/ui';
+import { ACCEPT, gh, invalidate, isTauri, useGh, useGhAll } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { confirmDialog, toast, useAction, useDraft } from '../lib/feedback';
+import { confirmDialog, promptDialog, toast, toastError, useAction, useDraft } from '../lib/feedback';
 import type { Branch, CommitEntry, DiffFileEntry, PullRequest, Repo, User } from '../lib/types';
 import { encPath, plural } from '../lib/util';
 import { useRepo } from './Repo';
@@ -119,6 +120,8 @@ function Managed<T>({
   add,
   empty,
   icon,
+  actions,
+  extra,
 }: {
   title: string;
   path: string;
@@ -126,9 +129,13 @@ function Managed<T>({
   rowKey: (x: T) => string | number;
   render: (x: T) => ReactNode;
   remove?: (x: T) => { path: string; confirm: string };
-  add?: { fields: { key: string; label: string; area?: boolean; placeholder?: string }[]; submit: (v: Record<string, string>) => Promise<unknown>; label: string };
+  add?: { fields: { key: string; label: string; area?: boolean; placeholder?: string; options?: { value: string; label: string }[]; optional?: boolean; secret?: boolean }[]; submit: (v: Record<string, string>) => Promise<unknown>; label: string };
   empty: string;
   icon: ReactNode;
+  // buttons beside each row
+  actions?: (x: T, refresh: () => Promise<unknown>) => ReactNode;
+  // shown under a row
+  extra?: (x: T) => ReactNode;
 }) {
   const q = useGh<any>(path);
   const items: T[] = q.data ? (pick ? pick(q.data) : q.data) : [];
@@ -142,9 +149,10 @@ function Managed<T>({
       </div>
       <ListState q={q} count={items.length} empty={empty} />
       {items.map((x) => (
-        <div key={rowKey(x)} className="row compact">
+        <div key={rowKey(x)} className="row compact wrap">
           <span className="state-icon">{icon}</span>
           <div className="row-main">{render(x)}</div>
+          {actions?.(x, refresh)}
           {remove && (
             <button
               className="icon-btn"
@@ -159,6 +167,7 @@ function Managed<T>({
               <TrashIcon />
             </button>
           )}
+          {extra && <div className="row-extra">{extra(x)}</div>}
         </div>
       ))}
       {add && (
@@ -167,7 +176,8 @@ function Managed<T>({
           onSubmit={(e) => {
             e.preventDefault();
             void run(async () => {
-              await add.submit(values);
+              const filled = Object.fromEntries(add.fields.map((f) => [f.key, values[f.key] ?? f.options?.[0].value ?? '']));
+            await add.submit(filled);
               setValues({});
               await refresh();
             }, 'Added');
@@ -175,16 +185,24 @@ function Managed<T>({
         >
           {add.fields.map((f) => (
             <Field key={f.key} label={f.label}>
-              {f.area ? (
+              {f.options ? (
+                <select className="input" value={values[f.key] ?? f.options[0].value} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}>
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              ) : f.area ? (
                 <textarea className="input mono" rows={3} placeholder={f.placeholder} value={values[f.key] ?? ''} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
               ) : (
-                <input className="input" placeholder={f.placeholder} value={values[f.key] ?? ''} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
+                <input className="input" type={f.secret ? 'password' : 'text'} autoComplete="off" placeholder={f.placeholder} value={values[f.key] ?? ''} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
               )}
             </Field>
           ))}
           <div className="form-foot">
             <span className="spacer" />
-            <button className="btn primary" disabled={busy || add.fields.some((f) => !values[f.key]?.trim())}>
+            <button className="btn primary" disabled={busy || add.fields.some((f) => !f.options && !f.optional && !values[f.key]?.trim())}>
               {add.label}
             </button>
           </div>
@@ -320,7 +338,7 @@ function Automation({ repo }: { repo: Repo }) {
   const api = `/repos/${repo.full_name}`;
   return (
     <>
-      <Managed<{ id: number; name: string; active: boolean; events: string[]; config: { url?: string } }>
+      <Managed<{ id: number; name: string; active: boolean; events: string[]; config: { url?: string; content_type?: string } }>
         title="Webhooks"
         path={`${api}/hooks?per_page=100`}
         rowKey={(h) => h.id}
@@ -334,11 +352,24 @@ function Automation({ repo }: { repo: Repo }) {
             <div className="meta">{h.events.join(', ')}</div>
           </>
         )}
+        actions={(h, refresh) => <HookActions api={`${api}/hooks/${h.id}`} active={h.active} refresh={refresh} />}
         remove={(h) => ({ path: `${api}/hooks/${h.id}`, confirm: 'Delete this webhook?' })}
         add={{
           label: 'Add webhook',
-          fields: [{ key: 'url', label: 'Payload URL (push events, JSON)', placeholder: 'https://example.com/hook' }],
-          submit: (v) => gh(`${api}/hooks`, { method: 'POST', body: { config: { url: v.url.trim(), content_type: 'json' }, events: ['push'] } }),
+          fields: [
+            { key: 'url', label: 'Payload URL', placeholder: 'https://example.com/hook' },
+            { key: 'events', label: 'Events, comma separated', placeholder: 'push, pull_request, issues  or  *', optional: true },
+            { key: 'type', label: 'Content type', options: [{ value: 'json', label: 'application/json' }, { value: 'form', label: 'application/x-www-form-urlencoded' }] },
+            { key: 'secret', label: 'Secret', optional: true, secret: true },
+          ],
+          submit: (v) =>
+            gh(`${api}/hooks`, {
+              method: 'POST',
+              body: {
+                config: { url: v.url.trim(), content_type: v.type, ...(v.secret ? { secret: v.secret } : {}) },
+                events: v.events.trim() ? v.events.split(',').map((e) => e.trim()).filter(Boolean) : ['push'],
+              },
+            }),
         }}
       />
       <Managed<{ id: number; title: string; read_only: boolean; created_at: string }>
@@ -357,12 +388,13 @@ function Automation({ repo }: { repo: Repo }) {
         )}
         remove={(k) => ({ path: `${api}/keys/${k.id}`, confirm: `Delete the deploy key “${k.title}”?` })}
         add={{
-          label: 'Add read-only key',
+          label: 'Add deploy key',
           fields: [
             { key: 'title', label: 'Title' },
             { key: 'key', label: 'Public key', area: true, placeholder: 'ssh-ed25519 AAAA…' },
+            { key: 'access', label: 'Access', options: [{ value: 'read', label: 'Read-only' }, { value: 'write', label: 'Read and write' }] },
           ],
-          submit: (v) => gh(`${api}/keys`, { method: 'POST', body: { title: v.title.trim(), key: v.key.trim(), read_only: true } }),
+          submit: (v) => gh(`${api}/keys`, { method: 'POST', body: { title: v.title.trim(), key: v.key.trim(), read_only: v.access !== 'write' } }),
         }}
       />
       <Managed<{ name: string; value: string; updated_at: string }>
@@ -387,31 +419,240 @@ function Automation({ repo }: { repo: Repo }) {
           submit: (v) => gh(`${api}/actions/variables`, { method: 'POST', body: { name: v.name.trim(), value: v.value } }),
         }}
       />
-      <Managed<{ name: string; updated_at: string }>
-        title="Actions secrets"
-        path={`${api}/actions/secrets?per_page=100`}
-        pick={(d) => d.secrets}
-        rowKey={(s) => s.name}
-        icon={<LockIcon />}
-        empty="No secrets"
-        render={(s) => (
+      <Secrets api={`${api}/actions`} title="Actions secrets" />
+      <Secrets api={`${api}/dependabot`} title="Dependabot secrets" />
+      <Managed<{ id: number; name: string; protection_rules?: { type: string }[]; updated_at: string }>
+        title="Environments"
+        path={`${api}/environments?per_page=100`}
+        pick={(d) => d.environments}
+        rowKey={(e) => e.id}
+        icon={<RocketIcon />}
+        empty="No environments"
+        render={(e) => (
           <div className="row-title">
-            <code>{s.name}</code>
-            <span className="muted small">
-              updated <Time iso={s.updated_at} />
-            </span>
+            {e.name}
+            {!!e.protection_rules?.length && <span className="badge">{plural(e.protection_rules.length, 'rule')}</span>}
           </div>
         )}
-        remove={(s) => ({ path: `${api}/actions/secrets/${s.name}`, confirm: `Delete the secret ${s.name}?` })}
+        remove={(e) => ({ path: `${api}/environments/${encodeURIComponent(e.name)}`, confirm: `Delete the ${e.name} environment?` })}
+        add={{
+          label: 'Add environment',
+          fields: [{ key: 'name', label: 'Name', placeholder: 'production' }],
+          submit: (v) => gh(`${api}/environments/${encodeURIComponent(v.name.trim())}`, { method: 'PUT', body: {} }),
+        }}
       />
-      <p className="muted small">
-        New secrets have to be encrypted before upload.{' '}
-        <a href={`${repo.html_url}/settings/secrets/actions`} data-external>
-          Add one on GitHub
-        </a>
-        .
-      </p>
+      <Managed<{ id: number; key_prefix: string; url_template: string; is_alphanumeric: boolean }>
+        title="Autolink references"
+        path={`${api}/autolinks`}
+        rowKey={(a) => a.id}
+        icon={<LinkIcon />}
+        empty="No autolinks"
+        render={(a) => (
+          <div className="row-title">
+            <code>{a.key_prefix}</code> <span className="muted">{a.url_template}</span>
+          </div>
+        )}
+        remove={(a) => ({ path: `${api}/autolinks/${a.id}`, confirm: `Delete the ${a.key_prefix} autolink?` })}
+        add={{
+          label: 'Add autolink',
+          fields: [
+            { key: 'prefix', label: 'Reference prefix', placeholder: 'TICKET-' },
+            { key: 'url', label: 'Target URL, with <num>', placeholder: 'https://example.com/TICKET?query=<num>' },
+            { key: 'alnum', label: 'Matches', options: [{ value: 'yes', label: 'Letters and numbers' }, { value: 'no', label: 'Numbers only' }] },
+          ],
+          submit: (v) => gh(`${api}/autolinks`, { method: 'POST', body: { key_prefix: v.prefix.trim(), url_template: v.url.trim(), is_alphanumeric: v.alnum === 'yes' } }),
+        }}
+      />
+      <Pages repo={repo} />
     </>
+  );
+}
+
+// ping, pause and delivery history for one webhook
+function HookActions({ api, active, refresh }: { api: string; active: boolean; refresh: () => Promise<unknown> }) {
+  const { busy, run } = useAction();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="btn sm" disabled={busy} onClick={() => run(() => gh(`${api}/pings`, { method: 'POST' }), 'Ping sent')}>
+        Ping
+      </button>
+      <button className="btn sm" disabled={busy} onClick={() => run(async () => (await gh(api, { method: 'PATCH', body: { active: !active } }), await refresh()), active ? 'Paused' : 'Activated')}>
+        {active ? 'Pause' : 'Activate'}
+      </button>
+      <button className="btn sm" onClick={() => setOpen(true)}>
+        Deliveries
+      </button>
+      {open && (
+        <Modal title="Recent deliveries" onClose={() => setOpen(false)} wide>
+          <Deliveries api={api} />
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function Deliveries({ api }: { api: string }) {
+  const q = useGh<{ id: number; guid: string; delivered_at: string; status: string; status_code: number; event: string; action: string | null; redelivery: boolean }[]>(`${api}/deliveries?per_page=50`);
+  const { busy, run } = useAction();
+  return (
+    <div className="dialog-body">
+      <ListState q={q} count={q.data?.length ?? 0} empty="No deliveries yet" />
+      {q.data?.map((d) => (
+        <div key={d.id} className="row compact">
+          <span className={`badge ${d.status_code >= 200 && d.status_code < 300 ? 'ok' : ''}`}>{d.status_code || '—'}</span>
+          <div className="row-main">
+            <div className="row-title">
+              {d.event}
+              {d.action ? `.${d.action}` : ''} {d.redelivery && <span className="badge">Redelivery</span>}
+            </div>
+            <div className="meta">
+              {d.status} · <Time iso={d.delivered_at} />
+            </div>
+          </div>
+          <button className="btn sm" disabled={busy} onClick={() => run(async () => (await gh(`${api}/deliveries/${d.id}/attempts`, { method: 'POST' }), await invalidate(`${api}/deliveries`)), 'Redelivering')}>
+            Redeliver
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// secrets are sealed with the repository's public key before upload
+function Secrets({ api, title }: { api: string; title: string }) {
+  return (
+    <Managed<{ name: string; updated_at: string }>
+      title={title}
+      path={`${api}/secrets?per_page=100`}
+      pick={(d) => d.secrets}
+      rowKey={(s) => s.name}
+      icon={<LockIcon />}
+      empty="No secrets"
+      render={(s) => (
+        <div className="row-title">
+          <code>{s.name}</code>
+          <span className="muted small">
+            updated <Time iso={s.updated_at} />
+          </span>
+        </div>
+      )}
+      actions={(s, refresh) =>
+        isTauri && (
+          <button
+            className="btn sm"
+            onClick={async () => {
+              const value = await promptDialog({ title: `Update ${s.name}`, label: 'New value', multiline: true, confirmLabel: 'Update secret' });
+              if (value) await putSecret(api, s.name, value).then(refresh, toastError);
+            }}
+          >
+            Update
+          </button>
+        )
+      }
+      remove={(s) => ({ path: `${api}/secrets/${s.name}`, confirm: `Delete the secret ${s.name}?` })}
+      add={
+        isTauri
+          ? {
+              label: 'Add secret',
+              fields: [
+                { key: 'name', label: 'Name', placeholder: 'MY_SECRET' },
+                { key: 'value', label: 'Value', area: true },
+              ],
+              submit: (v) => putSecret(api, v.name.trim(), v.value),
+            }
+          : undefined
+      }
+    />
+  );
+}
+
+async function putSecret(api: string, name: string, value: string) {
+  const key = await gh<{ key_id: string; key: string }>(`${api}/secrets/public-key`);
+  const encrypted_value = await invoke<string>('seal_secret', { key: key.key, value });
+  await gh(`${api}/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { encrypted_value, key_id: key.key_id } });
+}
+
+function Pages({ repo }: { repo: Repo }) {
+  const api = `/repos/${repo.full_name}/pages`;
+  const q = useGh<{ html_url: string; status: string | null; build_type: string; source?: { branch: string; path: string }; https_enforced?: boolean; cname: string | null }>(api);
+  const [branch, setBranch] = useState(repo.default_branch);
+  const [path, setPath] = useState('/');
+  const { busy, run } = useAction();
+  const refresh = () => invalidate(api);
+  const enabled = q.isSuccess;
+  return (
+    <section className="card">
+      <div className="card-head">
+        <strong>GitHub Pages</strong>
+        <span className="spacer" />
+        {enabled && (
+          <a className="btn sm" href={q.data!.html_url} data-external>
+            Visit site
+          </a>
+        )}
+      </div>
+      {q.isLoading ? (
+        <Loading />
+      ) : enabled ? (
+        <div className="form-section form">
+          <p className="muted">
+            {q.data!.build_type === 'workflow' ? 'Built by a GitHub Actions workflow.' : `Built from ${q.data!.source?.branch}${q.data!.source?.path}.`} Status: {q.data!.status ?? 'unknown'}.
+          </p>
+          <div className="toolbar">
+            {q.data!.build_type !== 'workflow' && (
+              <button className="btn" disabled={busy} onClick={() => run(() => gh(`${api}/builds`, { method: 'POST' }), 'Build requested')}>
+                Rebuild
+              </button>
+            )}
+            <button
+              className="btn"
+              disabled={busy}
+              onClick={() => run(async () => (await gh(api, { method: 'PUT', body: { build_type: q.data!.build_type === 'workflow' ? 'legacy' : 'workflow', ...(q.data!.source ? { source: q.data!.source } : {}) } }), await refresh()))}
+            >
+              Build with {q.data!.build_type === 'workflow' ? 'a branch' : 'Actions'}
+            </button>
+            <span className="spacer" />
+            <button
+              className="btn danger"
+              disabled={busy}
+              onClick={async () => {
+                if (await confirmDialog({ title: 'Unpublish this site?', confirmLabel: 'Unpublish', danger: true })) void run(async () => (await gh(api, { method: 'DELETE' }), await refresh()), 'Site unpublished');
+              }}
+            >
+              Unpublish
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="form-section form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void run(async () => (await gh(api, { method: 'POST', body: { source: { branch, path } } }), await refresh()), 'Pages enabled');
+          }}
+        >
+          <p className="muted">Publish a site from a branch of this repository.</p>
+          <div className="split">
+            <Field label="Branch">
+              <input className="input" value={branch} onChange={(e) => setBranch(e.target.value)} />
+            </Field>
+            <Field label="Folder">
+              <select className="input" value={path} onChange={(e) => setPath(e.target.value)}>
+                <option value="/">/ (root)</option>
+                <option value="/docs">/docs</option>
+              </select>
+            </Field>
+          </div>
+          <div className="form-foot">
+            <span className="spacer" />
+            <button className="btn primary" disabled={busy || !branch.trim()}>
+              Enable Pages
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }
 

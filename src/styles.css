@@ -635,3 +635,7 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .bulk-all { cursor: pointer; }
 .bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .btn.on { background: var(--active); }
+.row.wrap { flex-wrap: wrap; }
+.row-extra { flex-basis: 100%; }
+.asset-link { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+.asset-add { align-self: flex-start; margin-top: 8px; }
