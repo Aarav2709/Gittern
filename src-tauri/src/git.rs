@@ -31,6 +31,17 @@ pub struct Status {
     ahead: u32,
     behind: u32,
     files: Vec<FileChange>,
+    // "merge", "rebase", "cherry-pick" or "revert" while one is in progress
+    operation: Option<&'static str>,
+    // the prepared message during a merge
+    merge_message: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Stash {
+    index: u32,
+    message: String,
+    date: String,
 }
 
 #[derive(Serialize)]
@@ -43,6 +54,7 @@ pub struct Branches {
 pub struct LogEntry {
     sha: String,
     subject: String,
+    body: String,
     author: String,
     date: String,
 }
@@ -62,7 +74,7 @@ fn to_repo(path: &str) -> LocalRepo {
 }
 
 // only folders the user added through the picker can be operated on
-fn repo_dir(state: &AppState, repo: &str) -> Result<PathBuf, String> {
+pub(crate) fn repo_dir(state: &AppState, repo: &str) -> Result<PathBuf, String> {
     if state.settings.lock().unwrap().repos.iter().any(|r| r == repo) {
         Ok(PathBuf::from(repo))
     } else {
@@ -234,7 +246,35 @@ pub fn clone_repo(app: AppHandle, state: State<'_, AppState>, url: String) -> Re
 #[tauri::command(async)]
 pub fn git_status(state: State<'_, AppState>, repo: String) -> Result<Status, String> {
     let dir = repo_dir(&state, &repo)?;
-    Ok(parse_status(&git(&dir, &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"])?))
+    let mut st = parse_status(&git(&dir, &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"])?);
+    st.operation = operation(&dir);
+    if st.operation == Some("merge") {
+        st.merge_message = git_file(&dir, "MERGE_MSG").map(|m| m.lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("\n").trim().to_string());
+    }
+    Ok(st)
+}
+
+fn git_file(dir: &Path, name: &str) -> Option<String> {
+    let rel = git(dir, &["rev-parse", "--git-path", name]).ok()?;
+    std::fs::read_to_string(dir.join(rel.trim())).ok()
+}
+
+fn git_path_exists(dir: &Path, name: &str) -> bool {
+    git(dir, &["rev-parse", "--git-path", name]).map(|rel| dir.join(rel.trim()).exists()).unwrap_or(false)
+}
+
+fn operation(dir: &Path) -> Option<&'static str> {
+    if git_path_exists(dir, "MERGE_HEAD") {
+        Some("merge")
+    } else if git_path_exists(dir, "rebase-merge") || git_path_exists(dir, "rebase-apply") {
+        Some("rebase")
+    } else if git_path_exists(dir, "CHERRY_PICK_HEAD") {
+        Some("cherry-pick")
+    } else if git_path_exists(dir, "REVERT_HEAD") {
+        Some("revert")
+    } else {
+        None
+    }
 }
 
 #[tauri::command(async)]
@@ -253,12 +293,28 @@ pub fn git_diff(state: State<'_, AppState>, repo: String, path: String, untracke
 }
 
 #[tauri::command(async)]
-pub fn git_commit(state: State<'_, AppState>, repo: String, summary: String, description: String, paths: Vec<String>) -> Result<(), String> {
+pub fn git_commit(state: State<'_, AppState>, repo: String, summary: String, description: String, paths: Vec<String>, amend: Option<bool>) -> Result<(), String> {
     let dir = repo_dir(&state, &repo)?;
-    if summary.trim().is_empty() || paths.is_empty() {
+    let amend = amend.unwrap_or(false);
+    let merging = operation(&dir).is_some();
+    if summary.trim().is_empty() || (paths.is_empty() && !amend && !merging) {
         return Err("A commit needs a summary and at least one file".into());
     }
-    let _ = git(&dir, &["reset", "-q"]);
+    // a reset would throw away an in-progress merge
+    if !merging {
+        let _ = git(&dir, &["reset", "-q"]);
+    }
+    if paths.is_empty() {
+        let mut commit = base(&dir);
+        commit.args(["commit", "-q", "-m", summary.trim()]);
+        if !description.trim().is_empty() {
+            commit.args(["-m", description.trim()]);
+        }
+        if amend {
+            commit.arg("--amend");
+        }
+        return finish(commit, &[0]).map(|_| ());
+    }
     let mut add = base(&dir);
     add.args(["add", "-A", "--"]);
     for p in &paths {
@@ -270,7 +326,114 @@ pub fn git_commit(state: State<'_, AppState>, repo: String, summary: String, des
     if !description.trim().is_empty() {
         commit.args(["-m", description.trim()]);
     }
+    if amend {
+        commit.arg("--amend");
+    }
     finish(commit, &[0]).map(|_| ())
+}
+
+// the last commit's message, for amending
+#[tauri::command(async)]
+pub fn git_last_message(state: State<'_, AppState>, repo: String) -> Result<String, String> {
+    let dir = repo_dir(&state, &repo)?;
+    git(&dir, &["log", "-1", "--format=%B"]).map(|m| m.trim().to_string())
+}
+
+#[tauri::command(async)]
+pub fn git_stash_list(state: State<'_, AppState>, repo: String) -> Result<Vec<Stash>, String> {
+    let dir = repo_dir(&state, &repo)?;
+    let raw = git(&dir, &["stash", "list", "--format=%gs%x1f%cI%x1e"])?;
+    Ok(raw
+        .split('\x1e')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .enumerate()
+        .map(|(i, r)| {
+            let mut f = r.split('\x1f');
+            Stash { index: i as u32, message: f.next().unwrap_or("").to_string(), date: f.next().unwrap_or("").to_string() }
+        })
+        .collect())
+}
+
+#[tauri::command(async)]
+pub fn git_stash(state: State<'_, AppState>, repo: String, op: String, index: Option<u32>, message: Option<String>) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    let at = format!("stash@{{{}}}", index.unwrap_or(0));
+    let mut cmd = base(&dir);
+    match op.as_str() {
+        "push" => {
+            cmd.args(["stash", "push", "-q", "--include-untracked"]);
+            if let Some(m) = message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                cmd.args(["-m", m]);
+            }
+        }
+        "pop" | "apply" | "drop" => {
+            cmd.args(["stash", op.as_str(), "-q", at.as_str()]);
+        }
+        _ => return Err("Unknown stash operation".into()),
+    }
+    finish(cmd, &[0]).map(|_| ())
+}
+
+// merges another branch into the current one; conflicts are left to resolve
+#[tauri::command(async)]
+pub fn git_merge(state: State<'_, AppState>, repo: String, branch: String) -> Result<String, String> {
+    let dir = repo_dir(&state, &repo)?;
+    let branch = safe_ref(&branch)?;
+    let mut cmd = base(&dir);
+    cmd.args(["merge", "--no-edit", branch]);
+    match finish(cmd, &[0]) {
+        Ok(_) => Ok("merged".into()),
+        Err(e) if operation(&dir) == Some("merge") => Ok(format!("conflicts: {e}")),
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command(async)]
+pub fn git_abort(state: State<'_, AppState>, repo: String) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    let op = operation(&dir).ok_or("Nothing is in progress")?;
+    git(&dir, &[op, "--abort"]).map(|_| ())
+}
+
+// finishes a rebase, cherry-pick or revert once conflicts are fixed
+#[tauri::command(async)]
+pub fn git_continue(state: State<'_, AppState>, repo: String) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    let op = operation(&dir).ok_or("Nothing is in progress")?;
+    git(&dir, &["add", "-A"])?;
+    let mut cmd = base(&dir);
+    cmd.env("GIT_EDITOR", "true").args([op, "--continue"]);
+    finish(cmd, &[0]).map(|_| ())
+}
+
+#[tauri::command(async)]
+pub fn git_delete_branch(state: State<'_, AppState>, repo: String, branch: String, force: bool) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    let branch = safe_ref(&branch)?;
+    git(&dir, &["branch", if force { "-D" } else { "-d" }, branch]).map(|_| ())
+}
+
+#[tauri::command(async)]
+pub fn git_rename_branch(state: State<'_, AppState>, repo: String, from: String, to: String) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    git(&dir, &["branch", "-m", safe_ref(&from)?, safe_ref(&to)?]).map(|_| ())
+}
+
+// revert, cherry-pick, branch from or check out a commit from history
+#[tauri::command(async)]
+pub fn git_commit_action(state: State<'_, AppState>, repo: String, sha: String, op: String, name: Option<String>) -> Result<(), String> {
+    let dir = repo_dir(&state, &repo)?;
+    let sha = safe_ref(&sha)?;
+    match op.as_str() {
+        "revert" => git(&dir, &["revert", "--no-edit", sha]),
+        "cherry-pick" => git(&dir, &["cherry-pick", sha]),
+        "branch" => git(&dir, &["switch", "-q", "-c", safe_ref(name.as_deref().unwrap_or(""))?, sha]),
+        "tag" => git(&dir, &["tag", safe_ref(name.as_deref().unwrap_or(""))?, sha]),
+        "reset" => git(&dir, &["reset", "-q", "--mixed", sha]),
+        _ => return Err("Unknown commit action".into()),
+    }
+    .map(|_| ())
 }
 
 #[tauri::command(async)]
@@ -317,8 +480,12 @@ pub fn git_sync(state: State<'_, AppState>, repo: String, op: String) -> Result<
     match op.as_str() {
         "fetch" => cmd.args(["fetch", "-q", "--prune", "origin"]),
         "pull" => cmd.args(["pull", "-q", "--ff-only"]),
+        "pull-merge" => cmd.args(["pull", "-q", "--no-rebase", "--no-edit"]),
+        "pull-rebase" => cmd.args(["pull", "-q", "--rebase"]),
         // the first push of a branch also sets its upstream
         "push" => cmd.args(["push", "-q", "-u", "origin", "HEAD"]),
+        "force-push" => cmd.args(["push", "-q", "--force-with-lease", "-u", "origin", "HEAD"]),
+        "push-tags" => cmd.args(["push", "-q", "origin", "--tags"]),
         _ => return Err("Unknown sync operation".into()),
     };
     finish(cmd, &[0]).map(|_| ())
@@ -328,12 +495,18 @@ pub fn git_sync(state: State<'_, AppState>, repo: String, op: String) -> Result<
 pub fn git_log(state: State<'_, AppState>, repo: String, skip: u32) -> Result<Vec<LogEntry>, String> {
     let dir = repo_dir(&state, &repo)?;
     let skip = format!("--skip={skip}");
-    let Ok(raw) = git(&dir, &["log", "-n", "60", &skip, "--format=%H%x1f%s%x1f%an%x1f%aI%x1e"]) else { return Ok(vec![]) };
+    let Ok(raw) = git(&dir, &["log", "-n", "60", &skip, "--format=%H%x1f%s%x1f%an%x1f%aI%x1f%b%x1e"]) else { return Ok(vec![]) };
     Ok(raw
         .split('\x1e')
         .filter_map(|rec| {
             let mut f = rec.trim().split('\x1f');
-            Some(LogEntry { sha: f.next().filter(|s| !s.is_empty())?.into(), subject: f.next()?.into(), author: f.next()?.into(), date: f.next()?.into() })
+            Some(LogEntry {
+                sha: f.next().filter(|s| !s.is_empty())?.into(),
+                subject: f.next()?.into(),
+                author: f.next()?.into(),
+                date: f.next()?.into(),
+                body: f.next().unwrap_or("").trim().into(),
+            })
         })
         .collect())
 }

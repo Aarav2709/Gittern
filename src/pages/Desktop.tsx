@@ -19,14 +19,18 @@ import {
   TrashIcon,
   TriangleDownIcon,
   AlertIcon,
+  ArchiveIcon,
+  CodeIcon,
+  TerminalIcon,
+  XIcon,
 } from '@primer/octicons-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { DiffFile } from '../components/Diff';
-import { Dropdown, Empty, Loading, Modal, RepoGlyph, Segmented } from '../components/ui';
+import { CopyMenuItem, Dropdown, Empty, Loading, Modal, RepoGlyph, Segmented } from '../components/ui';
 import { ghHost, isTauri, useGh } from '../lib/api';
-import { confirmDialog, toast, useAction, useDraft } from '../lib/feedback';
+import { confirmDialog, promptDialog, toast, useAction, useDraft } from '../lib/feedback';
 import { usePref } from '../lib/store';
 import type { DiffFileEntry, Repo } from '../lib/types';
 import { plural, shortAgo } from '../lib/util';
@@ -46,10 +50,23 @@ interface Status {
   ahead: number;
   behind: number;
   files: FileChange[];
+  operation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null;
+  merge_message: string | null;
+}
+interface Stash {
+  index: number;
+  message: string;
+  date: string;
+}
+interface Editor {
+  id: string;
+  name: string;
+  custom: boolean;
 }
 interface LogEntry {
   sha: string;
   subject: string;
+  body: string;
   author: string;
   date: string;
 }
@@ -162,8 +179,22 @@ function Changes({ repo, status, refresh }: { repo: LocalRepo; status: Status; r
   const [summary, setSummary, clearSummary] = useDraft(`commit-summary:${repo.path}`);
   const [description, setDescription, clearDescription] = useDraft(`commit-body:${repo.path}`);
   const [layout] = usePref('diff-layout', 'unified');
+  const [amend, setAmend] = useState(false);
   const { busy, run } = useAction();
   const files = status.files;
+  const merging = !!status.operation;
+  // a merge comes with its own message
+  useEffect(() => {
+    if (status.operation === 'merge' && status.merge_message && !summary) setSummary(status.merge_message.split('\n')[0]);
+  }, [status.operation, status.merge_message]);
+  const toggleAmend = async (on: boolean) => {
+    setAmend(on);
+    if (!on || summary.trim()) return;
+    const msg = await invoke<string>('git_last_message', { repo: repo.path }).catch(() => '');
+    const [first, ...rest] = msg.split('\n');
+    setSummary(first);
+    setDescription(rest.join('\n').trim());
+  };
   const current = files.find((f) => f.path === picked) ?? files[0];
   const diff = useLocal<string>('git_diff', current ? { repo: repo.path, path: current.path, untracked: current.untracked } : null);
   const entries = useMemo(() => (diff.data ? splitPatch(diff.data) : []), [diff.data]);
@@ -175,12 +206,18 @@ function Changes({ repo, status, refresh }: { repo: LocalRepo; status: Status; r
   };
   const commit = () =>
     run(async () => {
-      await invoke('git_commit', { repo: repo.path, summary, description, paths: included.map((f) => f.path) });
+      await invoke('git_commit', { repo: repo.path, summary, description, paths: included.map((f) => f.path), amend });
       clearSummary();
       clearDescription();
       setSkipped(new Set());
+      setAmend(false);
       await refresh();
-    }, 'Committed');
+    }, amend ? 'Commit amended' : 'Committed');
+  const stash = async () => {
+    const message = await promptDialog({ title: 'Stash all changes', label: 'Message (optional)', initial: 'WIP', confirmLabel: 'Stash' });
+    if (message === null) return;
+    void run(async () => (await invoke('git_stash', { repo: repo.path, op: 'push', message }), await refresh()), 'Changes stashed');
+  };
   const discard = async (list: FileChange[]) => {
     const what = list.length === 1 ? list[0].path : plural(list.length, 'file');
     if (!(await confirmDialog({ title: `Discard changes to ${what}?`, body: 'This throws the changes away. It cannot be undone.', confirmLabel: 'Discard', danger: true }))) return;
@@ -196,6 +233,11 @@ function Changes({ repo, status, refresh }: { repo: LocalRepo; status: Status; r
             {plural(files.length, 'changed file')}
           </label>
           <span className="spacer" />
+          {files.length > 0 && !merging && (
+            <button className="btn sm" title="Stash all changes" disabled={busy} onClick={stash}>
+              Stash
+            </button>
+          )}
           {files.length > 0 && (
             <button className="icon-btn sm" title="Discard all changes" aria-label="Discard all changes" disabled={busy} onClick={() => discard(files)}>
               <TrashIcon size={14} />
@@ -234,8 +276,11 @@ function Changes({ repo, status, refresh }: { repo: LocalRepo; status: Status; r
         >
           <input className="input" placeholder={current ? `Update ${current.path.split('/').pop()}` : 'Summary (required)'} value={summary} onChange={(e) => setSummary(e.target.value)} aria-label="Commit summary" />
           <textarea className="input" rows={3} placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} aria-label="Commit description" />
-          <button className="btn primary block" disabled={busy || !summary.trim() || included.length === 0}>
-            {busy ? 'Committing…' : `Commit ${included.length ? plural(included.length, 'file') + ' ' : ''}to ${status.branch}`}
+          <label className="check-row small">
+            <input type="checkbox" checked={amend} disabled={merging} onChange={(e) => void toggleAmend(e.target.checked)} /> Amend last commit
+          </label>
+          <button className="btn primary block" disabled={busy || !summary.trim() || (included.length === 0 && !amend && !merging)}>
+            {busy ? 'Committing…' : amend ? 'Amend last commit' : merging ? `Commit merge to ${status.branch}` : `Commit ${included.length ? plural(included.length, 'file') + ' ' : ''}to ${status.branch}`}
           </button>
           {status.ahead > 0 && (
             <button
@@ -271,8 +316,25 @@ function Changes({ repo, status, refresh }: { repo: LocalRepo; status: Status; r
   );
 }
 
-function History({ repo }: { repo: LocalRepo }) {
+function History({ repo, refresh, page }: { repo: LocalRepo; refresh: () => Promise<unknown>; page: string | null }) {
   const log = useLocal<LogEntry[]>('git_log', { repo: repo.path, skip: 0 });
+  const { busy, run } = useAction();
+  const act = async (c: LogEntry, op: 'revert' | 'branch' | 'tag' | 'reset' | 'cherry-pick') => {
+    let name: string | null = null;
+    if (op === 'branch' || op === 'tag') {
+      name = await promptDialog({ title: op === 'branch' ? 'Create a branch from this commit' : 'Tag this commit', label: op === 'branch' ? 'Branch name' : 'Tag name', confirmLabel: 'Create' });
+      if (!name) return;
+    } else if (
+      !(await confirmDialog(
+        op === 'revert'
+          ? { title: `Revert “${c.subject}”?`, body: 'Adds a new commit that undoes it.', confirmLabel: 'Revert' }
+          : { title: `Reset to ${c.sha.slice(0, 7)}?`, body: 'Later commits are taken back; their changes stay as uncommitted work.', confirmLabel: 'Reset', danger: true },
+      ))
+    )
+      return;
+    const done = { revert: 'Reverted', branch: `On ${name}`, tag: `Tagged ${name}`, reset: 'Reset', 'cherry-pick': 'Cherry-picked' }[op];
+    void run(async () => (await invoke('git_commit_action', { repo: repo.path, sha: c.sha, op, name }), await refresh()), done);
+  };
   const [picked, setPicked] = useState<string | null>(null);
   const [layout] = usePref('diff-layout', 'unified');
   const current = log.data?.find((c) => c.sha === picked) ?? log.data?.[0];
@@ -304,7 +366,24 @@ function History({ repo }: { repo: LocalRepo }) {
         ) : (
           <>
             <div className="card commit-card">
-              <h2>{current.subject}</h2>
+              <div className="toolbar">
+                <h2>{current.subject}</h2>
+                <span className="spacer" />
+                <Dropdown align="right" className="icon-btn" title="Commit actions" trigger={<KebabHorizontalIcon />} disabled={busy}>
+                  {(close) => (
+                    <div className="menu" onClick={close}>
+                      <button onClick={() => act(current, 'revert')}>Revert this commit</button>
+                      <button onClick={() => act(current, 'branch')}>Create branch from here…</button>
+                      <button onClick={() => act(current, 'tag')}>Create tag…</button>
+                      <button onClick={() => act(current, 'reset')}>Reset to this commit…</button>
+                      <hr />
+                      <CopyMenuItem text={current.sha} label="Copy SHA" />
+                      {page && <Link to={`${page}/commit/${current.sha}`}>View on GitHub</Link>}
+                    </div>
+                  )}
+                </Dropdown>
+              </div>
+              {current.body && <pre className="commit-body">{current.body}</pre>}
               <div className="meta">
                 <strong>{current.author}</strong> committed {new Date(current.date).toLocaleString()} <span className="mono">{current.sha.slice(0, 7)}</span>
                 <span className="spacer" />
@@ -321,13 +400,115 @@ function History({ repo }: { repo: LocalRepo }) {
   );
 }
 
+function Stashes({ repo, refresh }: { repo: LocalRepo; refresh: () => Promise<unknown> }) {
+  const list = useLocal<Stash[]>('git_stash_list', { repo: repo.path });
+  const { busy, run } = useAction();
+  const op = async (st: Stash, which: 'pop' | 'apply' | 'drop') => {
+    if (which === 'drop' && !(await confirmDialog({ title: 'Delete this stash?', body: st.message, confirmLabel: 'Delete', danger: true }))) return;
+    void run(async () => (await invoke('git_stash', { repo: repo.path, op: which, index: st.index }), await refresh()), { pop: 'Stash restored', apply: 'Stash applied', drop: 'Stash deleted' }[which]);
+  };
+  return (
+    <div className="local-stashes">
+      {list.isLoading && <Loading />}
+      {list.data?.length === 0 && (
+        <Empty title="No stashes" icon={<ArchiveIcon size={22} />}>
+          Stash changes from the Changes tab to set them aside without committing.
+        </Empty>
+      )}
+      {!!list.data?.length && (
+        <div className="card">
+          {list.data.map((st) => (
+            <div key={st.index} className="row compact">
+              <div className="row-main">
+                <div className="row-title">{st.message}</div>
+                <div className="meta">{st.date && shortAgo(st.date)}</div>
+              </div>
+              <button className="btn sm" disabled={busy} onClick={() => op(st, 'pop')}>
+                Restore
+              </button>
+              <button className="btn sm" disabled={busy} onClick={() => op(st, 'apply')}>
+                Apply
+              </button>
+              <button className="icon-btn" title="Delete stash" aria-label="Delete stash" disabled={busy} onClick={() => op(st, 'drop')}>
+                <TrashIcon />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// opens the repository in the preferred editor, with a menu of the others
+function OpenWith({ repo }: { repo: LocalRepo }) {
+  const editors = useLocal<Editor[]>('list_editors', {});
+  const [preferred, setPreferred] = usePref('editor', '');
+  const { busy, run } = useAction();
+  const list = editors.data ?? [];
+  const main = list.find((e) => e.id === preferred) ?? list[0];
+  const open = (e: Editor) => run(() => invoke('open_in_editor', { repo: repo.path, editor: e.id }));
+  const addEditor = () =>
+    run(async () => {
+      const added = await invoke<Editor | null>('add_editor');
+      if (!added) return;
+      setPreferred(added.id);
+      await editors.refetch();
+    });
+  return (
+    <div className="split-btn">
+      <button className="btn" disabled={busy || !main} onClick={() => main && open(main)} title={main ? `Open in ${main.name}` : 'No editor found'}>
+        <CodeIcon /> {main ? `Open in ${main.name}` : 'Open in editor'}
+      </button>
+      <Dropdown align="right" className="btn" title="Open with" trigger={<TriangleDownIcon />}>
+        {(close) => (
+          <div className="menu wide" onClick={close}>
+            {list.length === 0 && <span className="menu-note">No editors found on this computer.</span>}
+            {list.map((e) => (
+              <div key={e.id} className="menu-line">
+                <button onClick={() => (setPreferred(e.id), void open(e))}>
+                  <span className="check">{e.id === main?.id && <CheckIcon size={14} />}</span>
+                  {e.name}
+                </button>
+                {e.custom && (
+                  <button
+                    className="icon-btn sm"
+                    title="Forget this editor"
+                    aria-label={`Forget ${e.name}`}
+                    onClick={() => run(async () => (await invoke('remove_editor', { id: e.id }), await editors.refetch()))}
+                  >
+                    <XIcon size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+            <button onClick={addEditor}>
+              <span className="check" />
+              Choose another app…
+            </button>
+            <hr />
+            <button onClick={() => run(() => invoke('open_terminal', { repo: repo.path }))}>
+              <TerminalIcon /> Open in terminal
+            </button>
+            <button onClick={() => run(() => invoke('reveal_repo', { repo: repo.path }))}>
+              <FileDirectoryIcon /> Show in file manager
+            </button>
+          </div>
+        )}
+      </Dropdown>
+    </div>
+  );
+}
+
+const OP_NAME = { merge: 'A merge', rebase: 'A rebase', 'cherry-pick': 'A cherry-pick', revert: 'A revert' };
+
 // the local git workspace: changes, history, branches and sync for a folder on this computer
 export function Desktop() {
   const qc = useQueryClient();
   const [sp, setSp] = useSearchParams();
   const repos = useLocal<LocalRepo[]>('local_repos', {});
   const [currentPath, setCurrentPath] = usePref('local-repo', '');
-  const [view, setView] = useState<'changes' | 'history'>('changes');
+  const [view, setView] = useState<'changes' | 'history' | 'stashes'>('changes');
   const [cloning, setCloning] = useState(!!sp.get('clone'));
   const [branchName, setBranchName] = useState('');
   const { busy, run } = useAction();
@@ -356,7 +537,67 @@ export function Desktop() {
   };
   const add = (init: boolean) => run(async () => opened(await invoke<LocalRepo | null>('add_local_repo', { init })));
   const s = status.data;
-  const sync = (op: 'fetch' | 'pull' | 'push', done: string) => run(async () => (await invoke('git_sync', { repo: repo!.path, op }), await refresh()), done);
+  type Op = 'fetch' | 'pull' | 'pull-merge' | 'pull-rebase' | 'push' | 'force-push' | 'push-tags';
+  const syncOnce = (op: Op) => invoke('git_sync', { repo: repo!.path, op });
+  const sync = async (op: Op, done: string) => {
+    if (op === 'force-push' && !(await confirmDialog({ title: 'Force push?', body: 'This overwrites the remote branch. It stops if someone else pushed since your last fetch.', confirmLabel: 'Force push', danger: true }))) return;
+    try {
+      await syncOnce(op);
+      toast(done);
+    } catch (e) {
+      const msg = String(e);
+      // diverged: ask how to bring the remote work in
+      if (op === 'pull' && /fast-forward|diverg/i.test(msg)) {
+        const how = await promptDialog({
+          title: 'Your branch and origin have diverged',
+          label: 'How should the remote commits come in?',
+          options: [
+            { value: 'pull-merge', label: 'Merge them' },
+            { value: 'pull-rebase', label: 'Rebase my commits on top' },
+          ],
+          confirmLabel: 'Pull',
+        });
+        if (how) await run(() => syncOnce(how as Op), 'Pulled');
+      } else if (op === 'push' && /rejected|fetch first|non-fast-forward/i.test(msg)) {
+        toast('Origin has commits you don\'t have. Pull first.', 'error');
+      } else toast(msg, 'error');
+    }
+    await refresh();
+  };
+  const branchAction = async (what: 'merge' | 'delete' | 'rename') => {
+    const cur = branches.data?.current ?? '';
+    const others = (branches.data?.all ?? []).filter((b) => b !== cur).map((b) => ({ value: b, label: b }));
+    if (what === 'rename') {
+      const to = await promptDialog({ title: `Rename ${cur}`, label: 'New name', initial: cur, confirmLabel: 'Rename' });
+      if (to && to !== cur) void run(async () => (await invoke('git_rename_branch', { repo: repo!.path, from: cur, to }), await refresh()), `Renamed to ${to}`);
+      return;
+    }
+    if (!others.length) return toast('There are no other local branches');
+    const b = await promptDialog({
+      title: what === 'merge' ? `Merge into ${cur}` : 'Delete a local branch',
+      label: 'Branch',
+      options: others,
+      confirmLabel: what === 'merge' ? 'Merge' : 'Delete',
+      danger: what === 'delete',
+    });
+    if (!b) return;
+    if (what === 'merge') {
+      await run(async () => {
+        const out = await invoke<string>('git_merge', { repo: repo!.path, branch: b });
+        toast(out === 'merged' ? `Merged ${b} into ${cur}` : 'There are conflicts to resolve', out === 'merged' ? 'info' : 'error');
+        await refresh();
+      });
+      return;
+    }
+    try {
+      await invoke('git_delete_branch', { repo: repo!.path, branch: b, force: false });
+      toast(`Deleted ${b}`);
+    } catch {
+      if (await confirmDialog({ title: `${b} has unmerged commits`, body: 'Delete it anyway? Those commits become unreachable.', confirmLabel: 'Delete anyway', danger: true }))
+        await run(() => invoke('git_delete_branch', { repo: repo!.path, branch: b, force: true }), `Deleted ${b}`);
+    }
+    await refresh();
+  };
   const syncButton = !s ? null : !remote.data ? null : !s.upstream ? (
     <button className="btn primary" disabled={busy} onClick={() => sync('push', 'Branch published')}>
       <ArrowUpIcon /> Publish branch
@@ -472,6 +713,23 @@ export function Desktop() {
                 </button>
               </form>
               <div className="menu-scroll" onClick={close}>
+                {!branchName && (
+                  <>
+                    <button disabled={busy} onClick={() => branchAction('merge')}>
+                      <span className="check" />
+                      Merge a branch into this one…
+                    </button>
+                    <button disabled={busy} onClick={() => branchAction('rename')}>
+                      <span className="check" />
+                      Rename this branch…
+                    </button>
+                    <button disabled={busy} onClick={() => branchAction('delete')}>
+                      <span className="check" />
+                      Delete a branch…
+                    </button>
+                    <hr />
+                  </>
+                )}
                 {branches.data?.all
                   .filter((b) => b.toLowerCase().includes(branchName.toLowerCase()))
                   .map((b) => (
@@ -486,6 +744,7 @@ export function Desktop() {
         </Dropdown>
         {syncButton}
         <span className="spacer" />
+        <OpenWith repo={repo} />
         {page && (
           <Link className="btn" to={page}>
             View on GitHub
@@ -497,7 +756,14 @@ export function Desktop() {
               <span className="menu-note">{repo.path}</span>
               <button onClick={() => sync('fetch', 'Fetched')}>Fetch origin</button>
               <button onClick={() => sync('pull', 'Pulled')}>Pull</button>
+              <button onClick={() => sync('pull-rebase', 'Pulled')}>Pull with rebase</button>
               <button onClick={() => sync('push', 'Pushed')}>Push</button>
+              <button onClick={() => sync('force-push', 'Force pushed')}>Force push</button>
+              <button onClick={() => sync('push-tags', 'Tags pushed')}>Push tags</button>
+              <hr />
+              <button onClick={() => run(() => invoke('open_terminal', { repo: repo.path }))}>Open in terminal</button>
+              <button onClick={() => run(() => invoke('reveal_repo', { repo: repo.path }))}>Show in file manager</button>
+              <CopyMenuItem text={repo.path} label="Copy path" />
               <hr />
               <button
                 onClick={async () => {
@@ -517,19 +783,54 @@ export function Desktop() {
       ) : !s ? (
         <Loading />
       ) : (
-        <div className="local-body">
-          <div className="local-tabs">
-            <Segmented
-              value={view}
-              onChange={setView}
-              options={[
-                { value: 'changes', label: `Changes${s.files.length ? ` ${s.files.length}` : ''}` },
-                { value: 'history', label: 'History' },
-              ]}
-            />
+        <>
+          {s.operation && (
+            <div className="local-banner">
+              <AlertIcon />
+              <span>
+                {OP_NAME[s.operation]} is in progress.{' '}
+                {s.files.some((f) => f.status === 'conflict') ? 'Fix the conflicted files in your editor, then ' : 'All conflicts are fixed. '}
+                {s.operation === 'merge' ? 'commit to finish.' : 'continue to finish.'}
+              </span>
+              <span className="spacer" />
+              {s.operation !== 'merge' && (
+                <button className="btn sm primary" disabled={busy} onClick={() => run(async () => (await invoke('git_continue', { repo: repo.path }), await refresh()), 'Done')}>
+                  Continue
+                </button>
+              )}
+              <button
+                className="btn sm"
+                disabled={busy}
+                onClick={async () => {
+                  if (await confirmDialog({ title: `Abort the ${s.operation}?`, body: 'The branch goes back to how it was before.', confirmLabel: 'Abort', danger: true }))
+                    void run(async () => (await invoke('git_abort', { repo: repo.path }), await refresh()), 'Aborted');
+                }}
+              >
+                Abort
+              </button>
+            </div>
+          )}
+          <div className="local-body">
+            <div className="local-tabs">
+              <Segmented
+                value={view}
+                onChange={setView}
+                options={[
+                  { value: 'changes', label: `Changes${s.files.length ? ` ${s.files.length}` : ''}` },
+                  { value: 'history', label: 'History' },
+                  { value: 'stashes', label: 'Stashes' },
+                ]}
+              />
+            </div>
+            {view === 'changes' ? (
+              <Changes key={repo.path} repo={repo} status={s} refresh={refresh} />
+            ) : view === 'history' ? (
+              <History key={repo.path + s.branch} repo={repo} refresh={refresh} page={page} />
+            ) : (
+              <Stashes key={repo.path} repo={repo} refresh={refresh} />
+            )}
           </div>
-          {view === 'changes' ? <Changes key={repo.path} repo={repo} status={s} refresh={refresh} /> : <History key={repo.path + s.branch} repo={repo} />}
-        </div>
+        </>
       )}
       {dialog}
     </div>

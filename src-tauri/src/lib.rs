@@ -1,5 +1,6 @@
 // gittern backend
 
+mod apps;
 mod git;
 
 use std::collections::HashMap;
@@ -34,6 +35,9 @@ struct Settings {
     // local repositories added in desktop mode
     #[serde(default)]
     repos: Vec<String>,
+    // editor apps the user picked by hand
+    #[serde(default)]
+    editors: Vec<String>,
 }
 
 struct Cached {
@@ -465,6 +469,21 @@ pub fn run() {
             git::git_switch,
             git::git_sync,
             git::git_log,
+            git::git_last_message,
+            git::git_stash_list,
+            git::git_stash,
+            git::git_merge,
+            git::git_abort,
+            git::git_continue,
+            git::git_delete_branch,
+            git::git_rename_branch,
+            git::git_commit_action,
+            apps::list_editors,
+            apps::add_editor,
+            apps::remove_editor,
+            apps::open_in_editor,
+            apps::open_terminal,
+            apps::reveal_repo,
             git::git_show,
             git::git_undo,
             git::git_remote
