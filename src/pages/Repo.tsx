@@ -34,7 +34,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { Link, Navigate, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { Avatar, Dropdown, ErrorBox, Loading, Markdown, RepoGlyph, Segmented, Time } from '../components/ui';
 import { ACCEPT, gh, gql, invalidate, useGh, useGhAll, useGql } from '../lib/api';
-import { confirmDialog, toastError } from '../lib/feedback';
+import { confirmDialog, promptDialog, toast, toastError } from '../lib/feedback';
 import { langColor } from '../lib/langs';
 import type { Repo } from '../lib/types';
 import { toggleFavorite, useRepoList, visitRepo } from '../lib/store';
@@ -78,6 +78,53 @@ function StarButton({ repo }: { repo: Repo }) {
   return (
     <button className={`btn ${starred ? 'on' : ''}`} disabled={busy || q.isLoading} onClick={toggle}>
       {starred ? <StarFillIcon /> : <StarIcon />} {starred ? 'Starred' : 'Star'} <span className="count">{compact(repo.stargazers_count)}</span>
+    </button>
+  );
+}
+
+// pulls the upstream default branch into this fork
+function SyncFork({ repo }: { repo: Repo }) {
+  const [busy, setBusy] = useState(false);
+  const sync = async () => {
+    setBusy(true);
+    try {
+      const r = await gh<{ message: string }>(`/repos/${repo.full_name}/merge-upstream`, { method: 'POST', body: { branch: repo.default_branch } });
+      toast(r.message || 'Fork is up to date');
+      await invalidate(`/repos/${repo.full_name}`);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="link-btn small" disabled={busy} onClick={sync}>
+      {busy ? 'Syncing…' : 'Sync fork'}
+    </button>
+  );
+}
+
+function UseTemplate({ repo }: { repo: Repo }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const use = async () => {
+    const name = await promptDialog({ title: `New repository from ${repo.name}`, label: 'Repository name', body: 'Created under your account as a private repository.', confirmLabel: 'Create repository' });
+    if (!name) return;
+    setBusy(true);
+    try {
+      const me = await gh<{ login: string }>('/user');
+      const created = await gh<Repo>(`/repos/${repo.full_name}/generate`, { method: 'POST', body: { owner: me.login, name, private: true } });
+      await invalidate('/user/repos');
+      navigate(`/${created.full_name}`);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn primary" disabled={busy} onClick={use}>
+      {busy ? 'Creating…' : 'Use this template'}
     </button>
   );
 }
@@ -244,6 +291,7 @@ export function RepoLayout() {
           >
             <PinIcon /> {pinned ? 'Pinned' : 'Pin'}
           </button>
+          {repo.is_template && <UseTemplate repo={repo} />}
           <WatchButton repo={repo} />
           <ForkButton repo={repo} />
           <StarButton repo={repo} />
@@ -252,6 +300,7 @@ export function RepoLayout() {
       {repo.parent && (
         <div className="muted small fork-note">
           forked from <Link to={`/${repo.parent.full_name}`}>{repo.parent.full_name}</Link>
+          {repo.permissions?.push && <SyncFork repo={repo} />}
         </div>
       )}
       <TabBar tabs={tabs} section={section} />

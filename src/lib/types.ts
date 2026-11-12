@@ -47,6 +47,7 @@ export interface Repo {
   private: boolean;
   fork: boolean;
   archived: boolean;
+  is_template?: boolean;
   description: string | null;
   homepage: string | null;
   html_url: string;

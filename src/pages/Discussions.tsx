@@ -1,10 +1,10 @@
-import { ArrowUpIcon, CheckCircleFillIcon, CommentDiscussionIcon, CommentIcon } from '@primer/octicons-react';
+import { ArrowUpIcon, CheckCircleFillIcon, CommentDiscussionIcon, CommentIcon, KebabHorizontalIcon } from '@primer/octicons-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MarkdownEditor } from '../components/Editor';
-import { Avatar, Empty, ErrorBox, Field, ListState, Loading, LoadMore, Markdown, Time } from '../components/ui';
+import { Avatar, Dropdown, Empty, ErrorBox, Field, ListState, Loading, LoadMore, Markdown, Time } from '../components/ui';
 import { gql, invalidateGql, useGql, useGqlPages } from '../lib/api';
-import { confirmDialog, useAction, useDraft } from '../lib/feedback';
+import { confirmDialog, promptDialog, useAction, useDraft } from '../lib/feedback';
 import { plural } from '../lib/util';
 import { useRepo } from './Repo';
 
@@ -110,16 +110,17 @@ const DETAIL_QUERY = `
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     discussion(number: $number) {
-      id title bodyHTML createdAt closed locked upvoteCount viewerHasUpvoted viewerCanUpvote viewerCanClose viewerCanReopen url
+      id title body bodyHTML createdAt closed locked upvoteCount viewerHasUpvoted viewerCanUpvote viewerCanClose viewerCanReopen viewerCanUpdate viewerCanDelete url
       author { login avatarUrl }
-      category { name isAnswerable }
+      category { id name isAnswerable }
+      repository { viewerPermission discussionCategories(first: 25) { nodes { id name } } }
       comments(first: 40, after: $after) {
         totalCount
         pageInfo { hasNextPage endCursor }
         nodes {
-          id bodyHTML createdAt isAnswer upvoteCount viewerHasUpvoted viewerCanMarkAsAnswer viewerCanUnmarkAsAnswer viewerCanDelete
+          id body bodyHTML createdAt isAnswer upvoteCount viewerHasUpvoted viewerCanMarkAsAnswer viewerCanUnmarkAsAnswer viewerCanDelete viewerCanUpdate
           author { login avatarUrl }
-          replies(first: 50) { nodes { id bodyHTML createdAt viewerCanDelete author { login avatarUrl } } }
+          replies(first: 50) { nodes { id body bodyHTML createdAt viewerCanDelete viewerCanUpdate author { login avatarUrl } } }
         }
       }
     }
@@ -146,6 +147,9 @@ export function DiscussionDetail() {
   const [comment, setComment, clearComment] = useDraft(`discussion:${repo.full_name}#${number}`);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [reply, setReply] = useState('');
+  // the post being edited, by node id
+  const [editing, setEditing] = useState<{ id: string; body: string; title?: string } | null>(null);
+  const navigate = useNavigate();
   const { busy, run } = useAction();
   const act = (fn: () => Promise<unknown>, done?: string) => void run(async () => (await fn(), await invalidateGql('discussion')), done);
 
@@ -155,6 +159,52 @@ export function DiscussionDetail() {
   if (!d) return <Empty title="Discussion not found" />;
   const post = (body: string, replyToId?: string) =>
     gql('mutation($id: ID!, $body: String!, $reply: ID) { addDiscussionComment(input: { discussionId: $id, body: $body, replyToId: $reply }) { clientMutationId } }', { id: d.id, body, reply: replyToId ?? null });
+  const saveEdit = () =>
+    editing &&
+    act(async () => {
+      if (editing.id === d.id) await gql('mutation($id: ID!, $t: String!, $b: String!) { updateDiscussion(input: { discussionId: $id, title: $t, body: $b }) { clientMutationId } }', { id: d.id, t: editing.title ?? d.title, b: editing.body });
+      else await gql('mutation($id: ID!, $b: String!) { updateDiscussionComment(input: { commentId: $id, body: $b }) { clientMutationId } }', { id: editing.id, b: editing.body });
+      setEditing(null);
+    });
+  const editor = (id: string) =>
+    editing?.id === id && (
+      <div className="stack">
+        {editing.title !== undefined && <input className="input" value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} aria-label="Title" />}
+        <MarkdownEditor value={editing.body} onChange={(body) => setEditing({ ...editing, body })} context={repo.full_name} onSubmit={saveEdit} autoFocus />
+        <div className="form-foot">
+          <span className="spacer" />
+          <button className="btn sm" onClick={() => setEditing(null)}>
+            Cancel
+          </button>
+          <button className="btn sm primary" disabled={busy || !editing.body.trim()} onClick={saveEdit}>
+            Save
+          </button>
+        </div>
+      </div>
+    );
+  const canModerate = ['ADMIN', 'MAINTAIN', 'WRITE', 'TRIAGE'].includes(d.repository?.viewerPermission);
+  const close = async () => {
+    const reason = await promptDialog({
+      title: 'Close discussion',
+      label: 'Reason',
+      options: [
+        { value: 'RESOLVED', label: 'Resolved' },
+        { value: 'OUTDATED', label: 'Outdated' },
+        { value: 'DUPLICATE', label: 'Duplicate' },
+      ],
+      confirmLabel: 'Close discussion',
+    });
+    if (reason) act(() => gql('mutation($id: ID!, $r: DiscussionCloseReason) { closeDiscussion(input: { discussionId: $id, reason: $r }) { clientMutationId } }', { id: d.id, r: reason }), 'Discussion closed');
+  };
+  const recategorize = async () => {
+    const cat = await promptDialog({ title: 'Change category', label: 'Category', options: (d.repository?.discussionCategories?.nodes ?? []).map((c: any) => ({ value: c.id, label: c.name })), confirmLabel: 'Move' });
+    if (cat && cat !== d.category.id) act(() => gql('mutation($id: ID!, $c: ID!) { updateDiscussion(input: { discussionId: $id, categoryId: $c }) { clientMutationId } }', { id: d.id, c: cat }), 'Category changed');
+  };
+  const removeDiscussion = async () => {
+    if (!(await confirmDialog({ title: 'Delete this discussion?', body: 'This cannot be undone.', confirmLabel: 'Delete discussion', danger: true }))) return;
+    await run(() => gql('mutation($id: ID!) { deleteDiscussion(input: { id: $id }) { clientMutationId } }', { id: d.id }), 'Discussion deleted');
+    navigate(`/${repo.full_name}/discussions`, { replace: true });
+  };
   const remove = async (id: string) => {
     if (await confirmDialog({ title: 'Delete this comment?', confirmLabel: 'Delete', danger: true }))
       act(() => gql('mutation($id: ID!) { deleteDiscussionComment(input: { id: $id }) { clientMutationId } }', { id }));
@@ -177,10 +227,26 @@ export function DiscussionDetail() {
             <button
               className="btn sm"
               disabled={busy}
-              onClick={() => act(() => gql(`mutation($id: ID!) { ${d.closed ? 'reopenDiscussion' : 'closeDiscussion'}(input: { discussionId: $id }) { clientMutationId } }`, { id: d.id }))}
+              onClick={() => (d.closed ? act(() => gql('mutation($id: ID!) { reopenDiscussion(input: { discussionId: $id }) { clientMutationId } }', { id: d.id })) : void close())}
             >
               {d.closed ? 'Reopen' : 'Close'}
             </button>
+          )}
+          {(d.viewerCanUpdate || d.viewerCanDelete || canModerate) && (
+            <Dropdown align="right" className="icon-btn sm" title="More" trigger={<KebabHorizontalIcon size={14} />}>
+              {(closeMenu) => (
+                <div className="menu" onClick={closeMenu}>
+                  {d.viewerCanUpdate && <button onClick={() => setEditing({ id: d.id, body: d.body, title: d.title })}>Edit</button>}
+                  {d.viewerCanUpdate && <button onClick={recategorize}>Change category</button>}
+                  {canModerate && (
+                    <button onClick={() => act(() => gql(`mutation($id: ID!) { ${d.locked ? 'unlockLockable' : 'lockLockable'}(input: { lockableId: $id }) { clientMutationId } }`, { id: d.id }), d.locked ? 'Unlocked' : 'Locked')}>
+                      {d.locked ? 'Unlock conversation' : 'Lock conversation'}
+                    </button>
+                  )}
+                  {d.viewerCanDelete && <button onClick={removeDiscussion}>Delete discussion</button>}
+                </div>
+              )}
+            </Dropdown>
           )}
           <a className="btn sm" href={d.url} data-external>
             Open on GitHub
@@ -192,7 +258,7 @@ export function DiscussionDetail() {
           <Avatar user={user(d.author)} size={32} />
           <div className="card comment-box">
             <div className="pad">
-              <Markdown html={d.bodyHTML} />
+              {editor(d.id) || <Markdown html={d.bodyHTML} />}
               <div className="reactions">
                 <Upvote id={d.id} count={d.upvoteCount} on={d.viewerHasUpvoted} disabled={busy || !d.viewerCanUpvote} act={act} />
               </div>
@@ -223,6 +289,11 @@ export function DiscussionDetail() {
                     {c.isAnswer ? 'Unmark answer' : 'Mark as answer'}
                   </button>
                 )}
+                {c.viewerCanUpdate && (
+                  <button className="link-btn small" onClick={() => setEditing({ id: c.id, body: c.body })}>
+                    Edit
+                  </button>
+                )}
                 {c.viewerCanDelete && (
                   <button className="link-btn small" onClick={() => remove(c.id)}>
                     Delete
@@ -230,7 +301,7 @@ export function DiscussionDetail() {
                 )}
               </div>
               <div className="pad">
-                <Markdown html={c.bodyHTML} />
+                {editor(c.id) || <Markdown html={c.bodyHTML} />}
                 <div className="reactions">
                   <Upvote id={c.id} count={c.upvoteCount} on={c.viewerHasUpvoted} disabled={busy} act={act} />
                   {!d.locked && (
@@ -250,13 +321,18 @@ export function DiscussionDetail() {
                         <Time iso={r.createdAt} />
                       </span>
                       <span className="spacer" />
+                      {r.viewerCanUpdate && (
+                        <button className="link-btn small" onClick={() => setEditing({ id: r.id, body: r.body })}>
+                          Edit
+                        </button>
+                      )}
                       {r.viewerCanDelete && (
                         <button className="link-btn small" onClick={() => remove(r.id)}>
                           Delete
                         </button>
                       )}
                     </div>
-                    <Markdown html={r.bodyHTML} />
+                    {editor(r.id) || <Markdown html={r.bodyHTML} />}
                   </div>
                 </div>
               ))}
