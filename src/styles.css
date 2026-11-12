@@ -639,3 +639,4 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .row-extra { flex-basis: 100%; }
 .asset-link { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .asset-add { align-self: flex-start; margin-top: 8px; }
+.status-row { grid-template-columns: 180px minmax(0, 1fr); }

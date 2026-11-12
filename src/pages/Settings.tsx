@@ -1,11 +1,11 @@
-import { CodespacesIcon, KeyIcon, MailIcon, OrganizationIcon, RepoIcon } from '@primer/octicons-react';
+import { BlockedIcon, CodespacesIcon, KeyIcon, LinkIcon, MailIcon, OrganizationIcon, RepoIcon } from '@primer/octicons-react';
 import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { applyTheme, type Theme } from '../components/Shell';
 import { Field, ListState, mediaProbe, Segmented, Switch, Time, useSubTab } from '../components/ui';
-import { gh, type GhError, invalidate, useGh, useRate } from '../lib/api';
+import { gh, type GhError, gql, invalidate, invalidateGql, useGh, useGql, useRate } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { confirmDialog, useAction } from '../lib/feedback';
+import { confirmDialog, promptDialog, useAction } from '../lib/feedback';
 import { usePref } from '../lib/store';
 import type { Repo, User } from '../lib/types';
 
@@ -130,11 +130,12 @@ function ProfileForm() {
   );
 }
 
-const scopeNote = (e: GhError | null) => (e && [403, 404].includes(e.status) ? 'Your token lacks the scope for this.' : null);
+const scopeNote = (e: GhError | null) => (e && [403, 404].includes(e.status) ? 'Your token lacks the scope for this. Sign out and back in to grant it, or run gh auth refresh with the missing scope.' : null);
 
 function Keys() {
   const ssh = useGh<{ id: number; title: string; key: string; created_at: string }[]>('/user/keys?per_page=100');
   const gpg = useGh<{ id: number; name: string | null; key_id: string; created_at: string }[]>('/user/gpg_keys?per_page=100');
+  const signing = useGh<{ id: number; title: string; key: string; created_at: string }[]>('/user/ssh_signing_keys?per_page=100');
   const [title, setTitle] = useState('');
   const [key, setKey] = useState('');
   const { busy, run } = useAction();
@@ -210,7 +211,197 @@ function Keys() {
             </button>
           </div>
         ))}
+        <div className="form-section">
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={async () => {
+              const armored = await promptDialog({ title: 'Add a GPG key', label: 'Public key', multiline: true, confirmLabel: 'Add key', body: 'Paste the block that starts with -----BEGIN PGP PUBLIC KEY BLOCK-----.' });
+              if (armored) void run(async () => (await gh('/user/gpg_keys', { method: 'POST', body: { armored_public_key: armored } }), await invalidate('/user/gpg_keys')), 'Key added');
+            }}
+          >
+            Add GPG key
+          </button>
+        </div>
       </section>
+      <section className="card">
+        <div className="card-head">
+          <strong>SSH signing keys</strong>
+        </div>
+        {scopeNote(signing.error) ? <p className="muted pad">{scopeNote(signing.error)}</p> : <ListState q={signing} count={signing.data?.length ?? 0} empty="No signing keys" />}
+        {signing.data?.map((k) => (
+          <div key={k.id} className="row compact">
+            <span className="state-icon">
+              <KeyIcon />
+            </span>
+            <div className="row-main">
+              <strong>{k.title}</strong>
+              <span className="muted mono small">{k.key.slice(0, 48)}…</span>
+            </div>
+            <button className="btn sm" disabled={busy} onClick={() => remove(`/user/ssh_signing_keys/${k.id}`, k.title)}>
+              Delete
+            </button>
+          </div>
+        ))}
+        <div className="form-section">
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={async () => {
+              const title = await promptDialog({ title: 'Add a signing key', label: 'Title', confirmLabel: 'Next' });
+              if (!title) return;
+              const key = await promptDialog({ title: 'Add a signing key', label: 'Public key', multiline: true, confirmLabel: 'Add key' });
+              if (key) void run(async () => (await gh('/user/ssh_signing_keys', { method: 'POST', body: { title, key } }), await invalidate('/user/ssh_signing_keys')), 'Key added');
+            }}
+          >
+            Add signing key
+          </button>
+        </div>
+      </section>
+    </>
+  );
+}
+
+const STATUS_QUERY = 'query { viewer { status { emoji message indicatesLimitedAvailability expiresAt } } }';
+
+// the little status line on a profile
+function StatusForm() {
+  const q = useGql<any>('viewer-status', STATUS_QUERY, {});
+  const st = q.data?.viewer?.status;
+  const [message, setMessage] = useState<string | null>(null);
+  const [emoji, setEmoji] = useState<string | null>(null);
+  const [busyFlag, setBusyFlag] = useState<boolean | null>(null);
+  const [expires, setExpires] = useState('');
+  const { busy, run } = useAction();
+  const text = message ?? st?.message ?? '';
+  const icon = emoji ?? st?.emoji ?? '';
+  const limited = busyFlag ?? !!st?.indicatesLimitedAvailability;
+  const save = (clear = false) =>
+    run(async () => {
+      const at = expires ? new Date(Date.now() + Number(expires) * 3600_000).toISOString() : null;
+      await gql('mutation($m: String, $e: String, $l: Boolean, $x: DateTime) { changeUserStatus(input: { message: $m, emoji: $e, limitedAvailability: $l, expiresAt: $x }) { clientMutationId } }', clear ? { m: null, e: null, l: false, x: null } : { m: text, e: icon || null, l: limited, x: at });
+      setMessage(null);
+      setEmoji(null);
+      setBusyFlag(null);
+      await invalidateGql('viewer-status');
+    }, clear ? 'Status cleared' : 'Status set');
+  return (
+    <form
+      className="card form-section form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <strong>Status</strong>
+      <div className="split status-row">
+        <Field label="Emoji" hint="A shortcode like :palm_tree: or a character.">
+          <input className="input" value={icon} placeholder=":speech_balloon:" onChange={(e) => setEmoji(e.target.value)} />
+        </Field>
+        <Field label="Message">
+          <input className="input" value={text} maxLength={80} placeholder="What's happening?" onChange={(e) => setMessage(e.target.value)} />
+        </Field>
+      </div>
+      <label className="check-row">
+        <input type="checkbox" checked={limited} onChange={(e) => setBusyFlag(e.target.checked)} /> Busy: people see you may be slow to respond
+      </label>
+      <Field label="Clear after">
+        <select className="input select" value={expires} onChange={(e) => setExpires(e.target.value)}>
+          <option value="">Never</option>
+          <option value="0.5">30 minutes</option>
+          <option value="1">1 hour</option>
+          <option value="4">4 hours</option>
+          <option value="24">Today</option>
+          <option value="168">This week</option>
+        </select>
+      </Field>
+      <div className="form-foot">
+        <span className="spacer" />
+        {st && (
+          <button type="button" className="btn" disabled={busy} onClick={() => save(true)}>
+            Clear status
+          </button>
+        )}
+        <button className="btn primary" disabled={busy || !text.trim()}>
+          Set status
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function Blocks() {
+  const q = useGh<User[]>('/user/blocks?per_page=100');
+  const { busy, run } = useAction();
+  const act = (fn: () => Promise<unknown>, done: string) => run(async () => (await fn(), await invalidate('/user/blocks')), done);
+  return (
+    <>
+      <Rows
+        title="Blocked users"
+        q={q}
+        items={q.data ?? []}
+        empty="You haven't blocked anyone"
+        icon={<BlockedIcon />}
+        render={(u) => ({
+          key: u.id,
+          main: <Link to={`/${u.login}`}>{u.login}</Link>,
+          side: (
+            <button className="btn sm" disabled={busy} onClick={() => act(() => gh(`/user/blocks/${u.login}`, { method: 'DELETE' }), `Unblocked ${u.login}`)}>
+              Unblock
+            </button>
+          ),
+        })}
+      />
+      <button
+        className="btn"
+        disabled={busy}
+        onClick={async () => {
+          const login = await promptDialog({ title: 'Block a user', label: 'Username', confirmLabel: 'Block', danger: true, body: 'They can no longer follow you, comment on your repositories or invite you.' });
+          if (login) void act(() => gh(`/user/blocks/${encodeURIComponent(login.replace(/^@/, ''))}`, { method: 'PUT' }), `Blocked ${login}`);
+        }}
+      >
+        Block a user
+      </button>
+    </>
+  );
+}
+
+function Socials() {
+  const q = useGh<{ provider: string; url: string }[]>('/user/social_accounts?per_page=100');
+  const { busy, run } = useAction();
+  const act = (fn: () => Promise<unknown>, done: string) => run(async () => (await fn(), await invalidate('/user/social_accounts')), done);
+  return (
+    <>
+      <Rows
+        title="Social accounts"
+        q={q}
+        items={q.data ?? []}
+        empty="No social accounts"
+        icon={<LinkIcon />}
+        render={(a) => ({
+          key: a.url,
+          main: (
+            <a href={a.url} data-external>
+              {a.url}
+            </a>
+          ),
+          side: (
+            <button className="btn sm" disabled={busy} onClick={() => act(() => gh('/user/social_accounts', { method: 'DELETE', body: { account_urls: [a.url] } }), 'Removed')}>
+              Remove
+            </button>
+          ),
+        })}
+      />
+      <button
+        className="btn"
+        disabled={busy}
+        onClick={async () => {
+          const url = await promptDialog({ title: 'Add a social account', label: 'Profile link', confirmLabel: 'Add' });
+          if (url) void act(() => gh('/user/social_accounts', { method: 'POST', body: { account_urls: [url] } }), 'Added');
+        }}
+      >
+        Add social account
+      </button>
     </>
   );
 }
@@ -309,8 +500,39 @@ function Account() {
               {e.email} {e.primary && <span className="badge">Primary</span>} {!e.verified && <span className="badge">Unverified</span>} {e.visibility === 'private' && <span className="badge">Private</span>}
             </div>
           ),
+          side: e.primary ? (
+            <button
+              className="btn sm"
+              disabled={busy}
+              onClick={() => act(() => gh('/user/email/visibility', { method: 'PATCH', body: { visibility: e.visibility === 'private' ? 'public' : 'private' } }), 'Visibility changed')}
+            >
+              Make {e.visibility === 'private' ? 'public' : 'private'}
+            </button>
+          ) : (
+            <button
+              className="btn sm"
+              disabled={busy}
+              onClick={async () => {
+                if (await confirmDialog({ title: `Remove ${e.email}?`, confirmLabel: 'Remove', danger: true })) void act(() => gh('/user/emails', { method: 'DELETE', body: { emails: [e.email] } }), 'Email removed');
+              }}
+            >
+              Remove
+            </button>
+          ),
         })}
       />
+      <button
+        className="btn"
+        disabled={busy}
+        onClick={async () => {
+          const email = await promptDialog({ title: 'Add an email address', label: 'Email', confirmLabel: 'Add', body: 'GitHub sends a verification link to it.' });
+          if (email) void act(() => gh('/user/emails', { method: 'POST', body: { emails: [email] } }), 'Email added');
+        }}
+      >
+        Add email address
+      </button>
+      <Blocks />
+      <Socials />
       <Rows
         title="Codespaces"
         q={spaces}
@@ -331,11 +553,27 @@ function Account() {
           ),
           side: (
             <>
-              {c.state === 'Available' && (
+              {c.state === 'Available' ? (
                 <button className="btn sm" disabled={busy} onClick={() => act(() => gh(`/user/codespaces/${c.name}/stop`, { method: 'POST' }), 'Stopping…')}>
                   Stop
                 </button>
+              ) : (
+                c.state === 'Shutdown' && (
+                  <button className="btn sm" disabled={busy} onClick={() => act(() => gh(`/user/codespaces/${c.name}/start`, { method: 'POST' }), 'Starting…')}>
+                    Start
+                  </button>
+                )
               )}
+              <button
+                className="btn sm"
+                disabled={busy}
+                onClick={async () => {
+                  if (await confirmDialog({ title: `Delete ${c.display_name || c.name}?`, body: 'Unpushed work in it is lost.', confirmLabel: 'Delete', danger: true }))
+                    void act(() => gh(`/user/codespaces/${c.name}`, { method: 'DELETE' }), 'Codespace deleted');
+                }}
+              >
+                Delete
+              </button>
               <a className="btn sm" href={c.web_url} data-external>
                 Open
               </a>
@@ -353,7 +591,7 @@ export function Settings() {
     ['app', 'Gittern'],
     ['profile', 'Profile'],
     ['account', 'Account'],
-    ['keys', 'SSH and GPG keys'],
+    ['keys', 'Keys'],
   ];
   return (
     <div className="page">
@@ -370,7 +608,12 @@ export function Settings() {
         </nav>
         <div className="stack">
           {tab === 'app' && <App />}
-          {tab === 'profile' && <ProfileForm />}
+          {tab === 'profile' && (
+            <>
+              <StatusForm />
+              <ProfileForm />
+            </>
+          )}
           {tab === 'account' && <Account />}
           {tab === 'keys' && <Keys />}
         </div>
