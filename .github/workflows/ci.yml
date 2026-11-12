@@ -20,10 +20,15 @@ jobs:
       - run: npx vite build
 
   rust:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -32,6 +37,7 @@ jobs:
           workspaces: src-tauri
       # tauri needs the frontend folder at compile time
       - run: mkdir -p dist && touch dist/index.html
+        shell: bash
       - run: cargo clippy --all-targets -- -D warnings
         working-directory: src-tauri
       - run: cargo test
