@@ -28,11 +28,12 @@ import { MarkdownEditor, quoteReply } from '../components/Editor';
 import { Avatar, Dropdown, Label, ListState, Loading, LoadMore, Markdown, ErrorBox, Segmented, StateIcon, StatePill, Time, UserLink } from '../components/ui';
 import { ACCEPT, gh, ghRaw, gql, invalidate, invalidateGql, useGh, useGhAll, useGhPages, useGql } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { confirmDialog, toast, useAction, useDraft } from '../lib/feedback';
+import { confirmDialog, promptDialog, toast, useAction, useDraft } from '../lib/feedback';
 import { usePref } from '../lib/store';
 import type { Issue, Label as LabelT, Milestone, PullRequest, Repo, User } from '../lib/types';
-import { copyText, plural } from '../lib/util';
+import { copyText, plural, routeFromUrl } from '../lib/util';
 import { issueSearch, itemRoute } from './Home';
+import { Development, IssueType, Projects, Relationships, Reviewers, SideSection, transferIssue } from './IssueSide';
 import { BranchCleanup, MergeBox, PullChecks, PullCommits, type PullExtras, PullFiles, useReviewApi, useReviewThreads } from './Pull';
 import { useRepo } from './Repo';
 
@@ -196,79 +197,6 @@ export function GlobalIssues({ kind }: { kind: 'issue' | 'pr' }) {
   );
 }
 
-interface Option {
-  key: string;
-  label: string;
-  avatar?: User;
-}
-
-export function PickerList({
-  path,
-  toOption,
-  selected,
-  onToggle,
-  close,
-  single,
-}: {
-  path: string;
-  toOption: (x: any) => Option;
-  selected: Set<string>;
-  onToggle: (key: string, on: boolean) => Promise<unknown> | void;
-  close: () => void;
-  single?: boolean;
-}) {
-  const q = useGhAll<any>(path);
-  const [filter, setFilter] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
-  const options = q.items.map(toOption).filter((o) => o.label.toLowerCase().includes(filter.toLowerCase()));
-  return (
-    <div className="menu wide">
-      <input className="input" autoFocus placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} />
-      <div className="menu-scroll">
-        {q.isLoading && <Loading />}
-        {q.error && <p className="muted pad">{q.error.message}</p>}
-        {!q.isLoading && !q.error && options.length === 0 && <p className="muted pad">Nothing to choose from.</p>}
-        {options.map((o) => (
-          <button
-            key={o.key}
-            disabled={busy !== null}
-            onClick={async () => {
-              setBusy(o.key);
-              try {
-                await onToggle(o.key, !selected.has(o.key));
-              } finally {
-                setBusy(null);
-              }
-              if (single) close();
-            }}
-          >
-            <span className="check">{busy === o.key ? <span className="spinner" /> : selected.has(o.key) ? <CheckIcon size={14} /> : null}</span>
-            {o.avatar && <Avatar user={o.avatar} size={18} />}
-            {o.label}
-          </button>
-        ))}
-        {q.truncated && <p className="menu-note">Showing the first {q.items.length}. Filter on GitHub for more.</p>}
-      </div>
-    </div>
-  );
-}
-
-function SideSection({ title, children, picker }: { title: string; children: ReactNode; picker?: Omit<Parameters<typeof PickerList>[0], 'close'> }) {
-  return (
-    <div className="side-section">
-      <div className="side-section-head">
-        <h4>{title}</h4>
-        {picker && (
-          <Dropdown align="right" className="icon-btn sm" title={`Edit ${title.toLowerCase()}`} trigger={<GearIcon size={14} />}>
-            {(close) => <PickerList {...picker} close={close} />}
-          </Dropdown>
-        )}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 const REACTIONS: [string, string][] = [
   ['+1', '👍'], ['-1', '👎'], ['laugh', '😄'], ['hooray', '🎉'], ['confused', '😕'], ['heart', '❤️'], ['rocket', '🚀'], ['eyes', '👀'],
 ];
@@ -289,6 +217,8 @@ export function Comment({
   onQuote,
   link,
   verb = 'commented',
+  hidden,
+  onHide,
 }: {
   c: { user: User | null; body?: string | null; body_html?: string; created_at?: string; submitted_at?: string; reactions?: Record<string, any>; author_association?: string };
   badge?: string;
@@ -299,8 +229,12 @@ export function Comment({
   onQuote?: (body: string) => void;
   link?: string;
   verb?: string;
+  // why the comment was minimized, if it was
+  hidden?: string;
+  onHide?: (classifier: string | null) => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
+  const [reveal, setReveal] = useState(false);
   const [draft, setDraft] = useState('');
   const { busy, run } = useAction();
   const reactions = REACTIONS.filter(([k]) => c.reactions?.[k] > 0);
@@ -355,6 +289,19 @@ export function Comment({
                     Edit
                   </button>
                 )}
+                {onHide &&
+                  (hidden ? (
+                    <button onClick={() => void run(() => onHide(null))}>Unhide</button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        const reason = await promptDialog({ title: 'Hide this comment', label: 'Reason', options: HIDE_REASONS, confirmLabel: 'Hide' });
+                        if (reason) void run(() => onHide(reason));
+                      }}
+                    >
+                      Hide
+                    </button>
+                  ))}
                 {onDelete && (
                   <button
                     onClick={async () => {
@@ -368,6 +315,14 @@ export function Comment({
             )}
           </Dropdown>
         </div>
+        {hidden && !reveal ? (
+          <div className="pad muted small">
+            This comment was hidden as {hidden.toLowerCase().replace('_', '-')}.{' '}
+            <button className="link-btn" onClick={() => setReveal(true)}>
+              Show it
+            </button>
+          </div>
+        ) : (
         <div className="pad">
           {editing ? (
             <>
@@ -399,10 +354,33 @@ export function Comment({
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );
 }
+
+const HIDE_REASONS = [
+  { value: 'OFF_TOPIC', label: 'Off-topic' },
+  { value: 'OUTDATED', label: 'Outdated' },
+  { value: 'RESOLVED', label: 'Resolved' },
+  { value: 'DUPLICATE', label: 'Duplicate' },
+  { value: 'SPAM', label: 'Spam' },
+  { value: 'ABUSE', label: 'Abuse' },
+];
+
+const LOCK_REASONS = [
+  { value: 'none', label: 'No reason' },
+  { value: 'off-topic', label: 'Off-topic' },
+  { value: 'too heated', label: 'Too heated' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'spam', label: 'Spam' },
+];
+
+const hideComment = (subjectId: string, classifier: string | null) =>
+  classifier
+    ? gql('mutation($id: ID!, $c: ReportedContentClassifiers!) { minimizeComment(input: { subjectId: $id, classifier: $c }) { clientMutationId } }', { id: subjectId, c: classifier })
+    : gql('mutation($id: ID!) { unminimizeComment(input: { subjectId: $id }) { clientMutationId } }', { id: subjectId });
 
 // one-line description for non-comment timeline events
 function describeEvent(ev: any, isPr: boolean): { icon: ReactNode; text: ReactNode } | null {
@@ -483,9 +461,10 @@ const EXTRAS_QUERY = `
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     issueOrPullRequest(number: $number) {
-      ... on Issue { id viewerSubscription isPinned viewerCanDelete }
+      ... on Issue { id viewerSubscription isPinned viewerCanDelete comments(last: 100) { nodes { databaseId isMinimized minimizedReason } } }
       ... on PullRequest {
         id viewerSubscription viewerCanUpdateBranch reviewDecision
+        comments(last: 100) { nodes { databaseId isMinimized minimizedReason } }
         reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } }
         closingIssuesReferences(first: 10) { nodes { number title state repository { nameWithOwner } } }
       }
@@ -512,7 +491,9 @@ export function IssueDetail({ view }: { view?: View }) {
   });
   const timeline = useGhPages<any>(`${api}/timeline?per_page=100`, { accept: ACCEPT.full });
   const extrasQ = useGql<any>('issue-extras', EXTRAS_QUERY, { owner: repo.owner.login, name: repo.name, number: Number(number) }, issue.isSuccess);
-  const extras: (PullExtras & { isPinned?: boolean; viewerCanDelete?: boolean }) | undefined = extrasQ.data?.repository?.issueOrPullRequest;
+  const extras: (PullExtras & { isPinned?: boolean; viewerCanDelete?: boolean; comments?: { nodes: { databaseId: number; isMinimized: boolean; minimizedReason: string | null }[] } }) | undefined =
+    extrasQ.data?.repository?.issueOrPullRequest;
+  const minimized = new Map((extras?.comments?.nodes ?? []).filter((c) => c.isMinimized).map((c) => [c.databaseId, c.minimizedReason ?? 'hidden']));
   const review = useReviewThreads(repo, number!, extras, isPr);
 
   const draftKey = `${repo.full_name}#${number}`;
@@ -555,13 +536,52 @@ export function IssueDetail({ view }: { view?: View }) {
     document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus();
   };
 
-  const submitComment = (thenClose?: 'completed' | 'not_planned' | 'reopen') =>
+  const submitComment = (thenClose?: 'completed' | 'not_planned' | 'duplicate' | 'reopen') =>
     run(async () => {
       if (comment.trim()) await gh(`${api}/comments`, { method: 'POST', body: { body: comment } });
       clearComment();
       if (thenClose === 'reopen') await gh(isPr ? prApi : api, { method: 'PATCH', body: { state: 'open' } });
       else if (thenClose) await gh(isPr ? prApi : api, { method: 'PATCH', body: isPr ? { state: 'closed' } : { state: 'closed', state_reason: thenClose } });
     });
+  const closeDuplicate = async () => {
+    const of = await promptDialog({ title: 'Close as duplicate', label: 'Duplicate of', body: 'An issue number, owner/repo#number or a link.', confirmLabel: 'Close issue' });
+    if (!of) return;
+    const ref = /^\d+$/.test(of) ? `#${of}` : of;
+    await run(async () => {
+      await gh(`${api}/comments`, { method: 'POST', body: { body: `${comment.trim() ? comment.trim() + '\n\n' : ''}Duplicate of ${ref}` } });
+      clearComment();
+      await gh(api, { method: 'PATCH', body: { state: 'closed', state_reason: 'duplicate' } });
+    }, 'Closed as duplicate');
+  };
+  const lock = async () => {
+    if (it.locked) return run(() => gh(`${api}/lock`, { method: 'DELETE' }), 'Unlocked');
+    const reason = await promptDialog({ title: 'Lock conversation', label: 'Reason', options: LOCK_REASONS, confirmLabel: 'Lock', body: 'Only collaborators can comment while it is locked.' });
+    if (!reason) return;
+    return run(() => gh(`${api}/lock`, { method: 'PUT', body: reason !== 'none' ? { lock_reason: reason } : {} }), 'Locked');
+  };
+  const changeBase = async () => {
+    const branches = await gh<{ name: string }[]>(`${base}/branches?per_page=100`).catch(() => []);
+    const to = await promptDialog({
+      title: 'Change the base branch',
+      label: 'Base',
+      options: branches.filter((b) => b.name !== pr.data!.head.ref).map((b) => ({ value: b.name, label: b.name })),
+      confirmLabel: 'Change base',
+    });
+    if (to && to !== pr.data!.base.ref) await run(() => gh(prApi, { method: 'PATCH', body: { base: to } }), `Base is now ${to}`);
+  };
+  const revert = async () => {
+    if (!(await confirmDialog({ title: 'Revert this pull request?', body: 'Opens a new pull request that undoes these changes.', confirmLabel: 'Create revert' }))) return;
+    const out = await act(() => gql<any>('mutation($id: ID!) { revertPullRequest(input: { pullRequestId: $id }) { revertPullRequest { number } } }', { id: pr.data!.node_id }));
+    const n = out?.revertPullRequest?.revertPullRequest?.number;
+    if (n) navigate(`/${repo.full_name}/pull/${n}`);
+  };
+  const transfer = async () => {
+    const out = await act(() => transferIssue(it.node_id, repo.full_name)).catch(() => null);
+    if (!out) return;
+    toast('Issue transferred');
+    const route = routeFromUrl(out.url);
+    if (route) navigate(route, { replace: true });
+  };
   const mutate = (name: string, input: string, vars: Record<string, unknown>, done?: string) =>
     run(() => gql(`mutation($id: ID!) { ${name}(input: { ${input} }) { clientMutationId } }`, vars), done);
 
@@ -673,6 +693,8 @@ export function IssueDetail({ view }: { view?: View }) {
                     onSave={mine || perms.push ? (body) => run(() => gh(commentApi, { method: 'PATCH', body: { body } })) : undefined}
                     onDelete={mine || perms.push ? () => run(() => gh(commentApi, { method: 'DELETE' })) : undefined}
                     onReact={(content) => run(() => toggleReaction(`${commentApi}/reactions`, content))}
+                    hidden={minimized.get(ev.id)}
+                    onHide={canTriage && ev.node_id ? (c) => run(() => hideComment(ev.node_id, c)) : undefined}
                   />
                 );
               }
@@ -682,6 +704,18 @@ export function IssueDetail({ view }: { view?: View }) {
                 if (!hasBody && !threads.length && ev.state === 'commented') return null;
                 return (
                   <div key={key} className="review-block">
+                    {perms.push && open && (ev.state === 'approved' || ev.state === 'changes_requested') && (
+                      <button
+                        className="link-btn small review-dismiss"
+                        disabled={busy}
+                        onClick={async () => {
+                          const message = await promptDialog({ title: `Dismiss ${ev.user?.login}'s review`, label: 'Reason', confirmLabel: 'Dismiss review', danger: true });
+                          if (message) void run(() => gh(`${prApi}/reviews/${ev.id}/dismissals`, { method: 'PUT', body: { message } }), 'Review dismissed');
+                        }}
+                      >
+                        Dismiss review
+                      </button>
+                    )}
                     {hasBody ? (
                       <Comment c={ev} context={repo.full_name} verb={REVIEW_VERB[ev.state] ?? 'reviewed'} onQuote={quote} link={ev.html_url} />
                     ) : (
@@ -747,9 +781,15 @@ export function IssueDetail({ view }: { view?: View }) {
                     <span className="muted small">Ctrl+Enter to send{comment ? ' · draft saved' : ''}</span>
                     <span className="spacer" />
                     {canClose && open && !isPr && (
-                      <button className="btn" disabled={busy} onClick={() => submitComment('not_planned')}>
-                        Close as not planned
-                      </button>
+                      <Dropdown align="up" className="btn" trigger="Close as…" disabled={busy}>
+                        {(close) => (
+                          <div className="menu" onClick={close}>
+                            <button onClick={() => submitComment('completed')}>Completed</button>
+                            <button onClick={() => submitComment('not_planned')}>Not planned</button>
+                            <button onClick={closeDuplicate}>Duplicate of…</button>
+                          </div>
+                        )}
+                      </Dropdown>
                     )}
                     {canClose && open && (
                       <button className="btn" disabled={busy} onClick={() => submitComment('completed')}>
@@ -799,34 +839,7 @@ export function IssueDetail({ view }: { view?: View }) {
               )}
             </SideSection>
 
-            {isPr && (
-              <SideSection
-                title="Reviewers"
-                picker={
-                  canTriage && open
-                    ? {
-                        path: `${base}/assignees?per_page=100`,
-                        toOption: userOption,
-                        selected: selected(pr.data?.requested_reviewers, 'login'),
-                        onToggle: (login, on) => run(() => gh(`${prApi}/requested_reviewers`, { method: on ? 'POST' : 'DELETE', body: { reviewers: [login] } })),
-                      }
-                    : undefined
-                }
-              >
-                {pr.data?.requested_reviewers?.length || pr.data?.requested_teams?.length ? (
-                  <>
-                    {pr.data.requested_reviewers.map((a) => (
-                      <div key={a.id}>
-                        <UserLink user={a} avatar={18} />
-                      </div>
-                    ))}
-                    {pr.data.requested_teams?.map((t) => <div key={t.id}>{t.name}</div>)}
-                  </>
-                ) : (
-                  <span className="muted">No reviews requested</span>
-                )}
-              </SideSection>
-            )}
+            {isPr && <Reviewers repo={repo} pr={pr.data} canEdit={canTriage && open} run={run} />}
 
             <SideSection
               title="Labels"
@@ -834,8 +847,17 @@ export function IssueDetail({ view }: { view?: View }) {
                 canTriage
                   ? {
                       path: `${base}/labels?per_page=100`,
-                      toOption: (l: LabelT) => ({ key: l.name, label: l.name }),
+                      toOption: (l: LabelT) => ({ key: l.name, label: l.name, color: l.color, note: l.description ?? undefined }),
                       selected: selected(it.labels, 'name'),
+                      onCreate: perms.push
+                        ? (name) =>
+                            run(async () => {
+                              const color = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+                              await gh(`${base}/labels`, { method: 'POST', body: { name, color } });
+                              await gh(`${api}/labels`, { method: 'POST', body: { labels: [name] } });
+                              await invalidate(`${base}/labels`);
+                            })
+                        : undefined,
                       onToggle: (name, on) =>
                         run(() => (on ? gh(`${api}/labels`, { method: 'POST', body: { labels: [name] } }) : gh(`${api}/labels/${encodeURIComponent(name)}`, { method: 'DELETE' }))),
                     }
@@ -870,6 +892,14 @@ export function IssueDetail({ view }: { view?: View }) {
               {it.milestone ? <Link to={`/${repo.full_name}/milestone/${it.milestone.number}`}>{it.milestone.title}</Link> : <span className="muted">No milestone</span>}
             </SideSection>
 
+            {!isPr && <IssueType repo={repo} issue={it} canEdit={canTriage} run={run} />}
+
+            <Projects repo={repo} nodeId={it.node_id} canEdit={canTriage} />
+
+            {!isPr && <Development repo={repo} issue={it} canEdit={!!perms.push} />}
+
+            {!isPr && <Relationships repo={repo} issue={it} canEdit={canTriage} />}
+
             {!!extras?.closingIssuesReferences?.nodes.length && (
               <SideSection title="Closes">
                 {extras.closingIssuesReferences.nodes.map((n) => (
@@ -898,9 +928,24 @@ export function IssueDetail({ view }: { view?: View }) {
                   Convert to draft
                 </button>
               )}
+              {isPr && pr.data && open && (isAuthor || perms.push) && (
+                <button className="link-btn" disabled={busy} onClick={changeBase}>
+                  Change base branch
+                </button>
+              )}
+              {isPr && pr.data?.merged && perms.push && (
+                <button className="link-btn" disabled={busy} onClick={revert}>
+                  Revert
+                </button>
+              )}
               {perms.push && (
-                <button className="link-btn" disabled={busy} onClick={() => run(() => gh(`${api}/lock`, { method: it.locked ? 'DELETE' : 'PUT' }), it.locked ? 'Unlocked' : 'Locked')}>
+                <button className="link-btn" disabled={busy} onClick={lock}>
                   {it.locked ? 'Unlock conversation' : 'Lock conversation'}
+                </button>
+              )}
+              {!isPr && perms.push && (
+                <button className="link-btn" disabled={busy} onClick={transfer}>
+                  Transfer issue
                 </button>
               )}
               {!isPr && perms.push && extras && (

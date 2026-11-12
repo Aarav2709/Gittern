@@ -449,6 +449,30 @@ export function BranchCleanup({ repo, pr, refresh }: { repo: Repo; pr: PullReque
   const sameRepo = pr.head.repo?.full_name === repo.full_name;
   const ref = useGh(sameRepo && pr.head.ref !== repo.default_branch && `/repos/${repo.full_name}/git/ref/heads/${encodeURIComponent(pr.head.ref)}`);
   const { busy, run } = useAction();
+  // gone: offer to bring it back at the pull request's head
+  if (ref.error?.status === 404 && sameRepo && pr.head.ref !== repo.default_branch)
+    return (
+      <div className="card merge-box">
+        <div className="merge-row">
+          <span>
+            The <code className="ref">{pr.head.ref}</code> branch was deleted.
+          </span>
+          <span className="spacer" />
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                await gh(`/repos/${repo.full_name}/git/refs`, { method: 'POST', body: { ref: `refs/heads/${pr.head.ref}`, sha: pr.head.sha } });
+                await Promise.all([invalidate(`/repos/${repo.full_name}/git`), invalidate(`/repos/${repo.full_name}/branches`), refresh()]);
+              }, `Restored ${pr.head.ref}`)
+            }
+          >
+            Restore branch
+          </button>
+        </div>
+      </div>
+    );
   if (!ref.isSuccess) return null;
   return (
     <div className="card merge-box">
