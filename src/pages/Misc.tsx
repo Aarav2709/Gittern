@@ -20,7 +20,8 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { MarkdownEditor } from '../components/Editor';
 import { Logo } from '../components/Shell';
 import { Avatar, CopyButton, CopyMenuItem, Dropdown, Empty, ErrorBox, Field, ListState, Loading, LoadMore, Markdown, RepoRow, Segmented, Time, UserLink } from '../components/ui';
-import { ACCEPT, gh, invalidate, isTauri, useGh, useGhPages } from '../lib/api';
+import { invoke } from '@tauri-apps/api/core';
+import { ACCEPT, gh, invalidate, isTauri, useGh, useGhPages, useGql } from '../lib/api';
 import type { DeviceCode, SignInApi } from '../lib/auth';
 import { confirmDialog, promptDialog, useAction, useDraft } from '../lib/feedback';
 import type { Branch, Issue, NotificationThread, Release, Repo, User } from '../lib/types';
@@ -260,6 +261,7 @@ function ReleaseCard({ r, latest }: { r: Release; latest: boolean }) {
   const navigate = useNavigate();
   const { busy, run } = useAction();
   const api = `/repos/${repo.full_name}/releases`;
+  const canEdit = !!repo.permissions?.push;
   return (
     <article className="card release">
       <div className="card-head">
@@ -303,14 +305,49 @@ function ReleaseCard({ r, latest }: { r: Release; latest: boolean }) {
         <div className="assets">
           <h4>Assets</h4>
           {r.assets.map((a) => (
-            <a key={a.id} href={a.browser_download_url} data-external className="asset">
-              <PackageIcon size={14} /> {a.name}
+            <div key={a.id} className="asset">
+              <a href={a.browser_download_url} data-external className="asset-link">
+                <PackageIcon size={14} /> {a.name}
+              </a>
               <span className="spacer" />
               <span className="muted small">
                 {compact(a.download_count)} downloads · {formatBytes(a.size)}
               </span>
-            </a>
+              {canEdit && (
+                <Dropdown align="right" className="icon-btn sm" title="Asset actions" trigger={<KebabHorizontalIcon size={14} />}>
+                  {(close) => (
+                    <div className="menu" onClick={close}>
+                      <button
+                        onClick={async () => {
+                          const name = await promptDialog({ title: 'Rename asset', label: 'File name', initial: a.name, confirmLabel: 'Rename' });
+                          if (name && name !== a.name) void run(async () => (await gh(`${api}/assets/${a.id}`, { method: 'PATCH', body: { name } }), await invalidate(api)), 'Renamed');
+                        }}
+                      >
+                        Rename
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (await confirmDialog({ title: `Delete ${a.name}?`, confirmLabel: 'Delete', danger: true }))
+                            void run(async () => (await gh(`${api}/assets/${a.id}`, { method: 'DELETE' }), await invalidate(api)), 'Asset deleted');
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </Dropdown>
+              )}
+            </div>
           ))}
+          {canEdit && isTauri && (
+            <button
+              className="btn sm asset-add"
+              disabled={busy}
+              onClick={() => run(async () => (await invoke('upload_release_asset', { repo: repo.full_name, release: r.id })) && (await invalidate(api)), undefined)}
+            >
+              {busy ? 'Uploading…' : 'Attach a file'}
+            </button>
+          )}
           {!r.draft &&
             ['zip', 'tar.gz'].map((ext) => (
               <a key={ext} href={`${repo.html_url}/archive/refs/tags/${r.tag_name}.${ext}`} data-external className="asset">
@@ -373,6 +410,10 @@ export function ReleaseForm() {
   const [name, setName] = useState('');
   const [body, setBody, clearBody] = useDraft(`release:${repo.full_name}:${id ?? 'new'}`);
   const [prerelease, setPre] = useState(false);
+  const [latest, setLatest] = useState<'true' | 'false' | 'legacy'>('legacy');
+  const [category, setCategory] = useState('');
+  const categories = useGql<any>('discussion-categories', 'query($o: String!, $n: String!) { repository(owner: $o, name: $n) { discussionCategories(first: 25) { nodes { name } } } }', { o: repo.owner.login, n: repo.name }, !!repo.has_discussions && !id);
+  const categoryNames: string[] = categories.data?.repository?.discussionCategories?.nodes.map((c: { name: string }) => c.name) ?? [];
   const { busy, run } = useAction();
   useEffect(() => {
     const r = existing.data;
@@ -388,7 +429,7 @@ export function ReleaseForm() {
 
   const save = (draft: boolean) =>
     run(async () => {
-      const payload = { tag_name: tag.trim(), target_commitish: target.trim(), name, body, draft, prerelease };
+      const payload = { tag_name: tag.trim(), target_commitish: target.trim(), name, body, draft, prerelease, make_latest: prerelease ? 'false' : latest, ...(category && !id ? { discussion_category_name: category } : {}) };
       const saved = await gh<Release>(id ? `${api}/${id}` : api, { method: id ? 'PATCH' : 'POST', body: payload });
       clearBody();
       await invalidate(api);
@@ -423,6 +464,23 @@ export function ReleaseForm() {
         <label className="check-row">
           <input type="checkbox" checked={prerelease} onChange={(e) => setPre(e.target.checked)} /> Pre-release
         </label>
+        {!prerelease && (
+          <select className="input select" value={latest} onChange={(e) => setLatest(e.target.value as typeof latest)} aria-label="Latest release">
+            <option value="legacy">Latest by date and version</option>
+            <option value="true">Mark as latest</option>
+            <option value="false">Don't mark as latest</option>
+          </select>
+        )}
+        {categoryNames.length > 0 && (
+          <select className="input select" value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Start a discussion">
+            <option value="">No discussion</option>
+            {categoryNames.map((c) => (
+              <option key={c} value={c}>
+                Discuss in {c}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="spacer" />
         <button className="btn" disabled={busy || !tag.trim()} onClick={() => save(true)}>
           Save draft
