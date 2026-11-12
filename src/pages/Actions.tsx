@@ -1,9 +1,9 @@
-import { CheckCircleFillIcon, DotFillIcon, GitBranchIcon, PackageIcon, PlayIcon, SkipIcon, StopIcon, SyncIcon, XCircleFillIcon } from '@primer/octicons-react';
+import { CheckCircleFillIcon, DotFillIcon, GitBranchIcon, KebabHorizontalIcon, PackageIcon, PlayIcon, SkipIcon, StopIcon, SyncIcon, XCircleFillIcon } from '@primer/octicons-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Dropdown, ErrorBox, Field, ListState, Loading, LoadMore, Time } from '../components/ui';
 import { gh, invalidate, useGh, useGhPages } from '../lib/api';
-import { confirmDialog, useAction } from '../lib/feedback';
+import { confirmDialog, promptDialog, useAction } from '../lib/feedback';
 import { duration, formatBytes } from '../lib/util';
 import { useRepo } from './Repo';
 
@@ -23,6 +23,7 @@ interface Run {
   run_started_at?: string;
   actor: { login: string } | null;
   html_url: string;
+  path?: string;
 }
 interface Step {
   number: number;
@@ -211,6 +212,10 @@ export function RunDetail() {
   const job = list.find((j) => j.id === picked) ?? list.find((j) => j.conclusion === 'failure') ?? list[0];
   const logs = useGh<string>(job?.status === 'completed' && `${base}/jobs/${job.id}/logs`, { text: true });
   const logRef = useRef<HTMLPreElement>(null);
+  const navigate = useNavigate();
+  const waiting = useGh<{ environment: { id: number; name: string }; current_user_can_approve: boolean; wait_timer: number }[]>(
+    run.data?.status === 'waiting' && `${base}/runs/${runId}/pending_deployments`,
+  );
 
   const lines = useMemo(() => (logs.data ?? '').split('\n').map((l) => l.replace(/^﻿?\d{4}-\d\d-\d\dT[\d:.]+Z /, '')), [logs.data]);
   const matched = useMemo(() => (find ? lines.filter((l) => l.toLowerCase().includes(find.toLowerCase())) : lines), [lines, find]);
@@ -224,6 +229,23 @@ export function RunDetail() {
   if (run.error) return <ErrorBox error={run.error} retry={run.refetch} />;
   const r = run.data!;
   const post = (path: string, done: string) => act(async () => (await gh(`${base}/runs/${runId}/${path}`, { method: 'POST' }), await invalidate(`${base}/runs/${runId}`)), done);
+  const review = async (state: 'approved' | 'rejected') => {
+    const envs = (waiting.data ?? []).filter((w) => w.current_user_can_approve);
+    const comment = await promptDialog({ title: state === 'approved' ? 'Approve and deploy' : 'Reject deployment', label: 'Comment', initial: state === 'approved' ? 'Approved' : 'Rejected', confirmLabel: state === 'approved' ? 'Approve' : 'Reject', danger: state === 'rejected' });
+    if (!comment) return;
+    await act(async () => {
+      await gh(`${base}/runs/${runId}/pending_deployments`, { method: 'POST', body: { environment_ids: envs.map((w) => w.environment.id), state, comment } });
+      await invalidate(`${base}/runs/${runId}`);
+    }, state === 'approved' ? 'Deployment approved' : 'Deployment rejected');
+  };
+  const destroy = async (what: 'run' | 'logs') => {
+    if (!(await confirmDialog({ title: what === 'run' ? 'Delete this workflow run?' : 'Delete the logs of this run?', body: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
+    await act(() => gh(`${base}/runs/${runId}${what === 'logs' ? '/logs' : ''}`, { method: 'DELETE' }), what === 'run' ? 'Run deleted' : 'Logs deleted');
+    if (what === 'run') {
+      await invalidate(`${base}/runs`);
+      navigate(`/${repo.full_name}/actions`, { replace: true });
+    } else await invalidate(`${base}/jobs`);
+  };
 
   return (
     <div className="stack">
@@ -245,9 +267,21 @@ export function RunDetail() {
         <span className="spacer" />
         {repo.permissions?.push &&
           (r.status !== 'completed' ? (
-            <button className="btn" disabled={busy} onClick={() => post('cancel', 'Cancelling…')}>
-              <StopIcon /> Cancel
-            </button>
+            <>
+              {waiting.data?.some((w) => w.current_user_can_approve) && (
+                <>
+                  <button className="btn primary" disabled={busy} onClick={() => review('approved')}>
+                    Approve {waiting.data.map((w) => w.environment.name).join(', ')}
+                  </button>
+                  <button className="btn" disabled={busy} onClick={() => review('rejected')}>
+                    Reject
+                  </button>
+                </>
+              )}
+              <button className="btn" disabled={busy} onClick={() => post('cancel', 'Cancelling…')}>
+                <StopIcon /> Cancel
+              </button>
+            </>
           ) : (
             <>
               {r.conclusion === 'failure' && (
@@ -260,6 +294,24 @@ export function RunDetail() {
               </button>
             </>
           ))}
+        <Dropdown align="right" className="icon-btn" title="More" trigger={<KebabHorizontalIcon />}>
+          {(close) => (
+            <div className="menu" onClick={close}>
+              {r.path && <Link to={`/${repo.full_name}/blob/${r.head_sha}/${r.path.split('@')[0]}`}>View workflow file</Link>}
+              <a href={r.html_url} data-external>
+                Open on GitHub
+              </a>
+              {repo.permissions?.push && r.status !== 'completed' && <button onClick={() => post('force-cancel', 'Force cancelling…')}>Force cancel</button>}
+              {repo.permissions?.push && r.status === 'completed' && (
+                <>
+                  <hr />
+                  <button onClick={() => destroy('logs')}>Delete logs</button>
+                  <button onClick={() => destroy('run')}>Delete run</button>
+                </>
+              )}
+            </div>
+          )}
+        </Dropdown>
       </div>
       <div className="run-layout">
         <div className="stack">
@@ -292,6 +344,11 @@ export function RunDetail() {
                 <strong>{job.name}</strong>
                 <span className="spacer" />
                 {job.started_at && job.completed_at && <span>{duration(+new Date(job.completed_at) - +new Date(job.started_at))}</span>}
+                {repo.permissions?.push && r.status === 'completed' && (
+                  <button className="btn sm" disabled={busy} onClick={() => act(async () => (await gh(`${base}/jobs/${job.id}/rerun`, { method: 'POST' }), await invalidate(`${base}/runs/${runId}`)), 'Re-running job…')}>
+                    <SyncIcon size={12} /> Re-run job
+                  </button>
+                )}
               </div>
               {job.steps?.map((st) => (
                 <div key={st.number} className="row compact">
