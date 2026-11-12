@@ -15,6 +15,7 @@ import { useAuth } from '../lib/auth';
 import type { Repo, User } from '../lib/types';
 import { compact } from '../lib/util';
 import { GistList } from './Gists';
+import { BlockButton, OrgPeople, OrgTeams } from './Org';
 
 const PROFILE_QUERY = `
 query($login: String!) {
@@ -197,31 +198,6 @@ function UserList({ path, empty }: { path: string; empty: string }) {
   );
 }
 
-function Teams({ org }: { org: string }) {
-  const q = useGhPages<{ id: number; name: string; slug: string; description: string | null; privacy: string; html_url: string }>(`/orgs/${org}/teams?per_page=50`);
-  return (
-    <div className="stack">
-      <div className="card">
-        <ListState q={q} count={q.items.length} empty="No teams you can see" />
-        {q.items.map((t) => (
-          <div key={t.id} className="row compact">
-            <span className="state-icon">
-              <PeopleIcon />
-            </span>
-            <div className="row-main">
-              <a className="row-link" href={t.html_url} data-external>
-                {t.name}
-              </a>
-              {t.description && <p className="row-desc">{t.description}</p>}
-            </div>
-            <span className="badge">{t.privacy}</span>
-          </div>
-        ))}
-      </div>
-      <LoadMore q={q} />
-    </div>
-  );
-}
 
 function Orgs({ login }: { login: string }) {
   const q = useGh<User[]>(`/users/${login}/orgs?per_page=30`);
@@ -280,6 +256,7 @@ export function Profile() {
         ) : (
           <>
             {isUser && <FollowButton login={u.login} />}
+            {isUser && u.login !== viewer.login && <BlockButton login={u.login} />}
             <a className="btn block" href={u.html_url} data-external>
               Open on GitHub
             </a>
@@ -350,8 +327,8 @@ export function Profile() {
         {tab === 'gists' && <GistList path={`/users/${u.login}/gists?per_page=30`} />}
         {tab === 'followers' && <UserList path={`/users/${u.login}/followers?per_page=50`} empty="No followers yet" />}
         {tab === 'following' && <UserList path={`/users/${u.login}/following?per_page=50`} empty="Not following anyone" />}
-        {tab === 'people' && <UserList path={`/orgs/${u.login}/members?per_page=50`} empty="No public members" />}
-        {tab === 'teams' && <Teams org={u.login} />}
+        {tab === 'people' && <OrgPeople org={u.login} />}
+        {tab === 'teams' && <OrgTeams org={u.login} />}
       </section>
     </div></div>
   );
