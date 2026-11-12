@@ -1,9 +1,10 @@
 import { AlertIcon, MilestoneIcon, PencilIcon, RepoForkedIcon, RocketIcon, ShieldCheckIcon, TableIcon, TagIcon, TrashIcon } from '@primer/octicons-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Avatar, Bars, Empty, ErrorBox, Field, ListState, Loading, LoadMore, RepoRow, Segmented, SubTabs, Time, UserLink, useSubTab } from '../components/ui';
-import { gh, type GhError, invalidate, useGh, useGhPages, useGqlPages, webUrl } from '../lib/api';
-import { confirmDialog, useAction } from '../lib/feedback';
+import { Avatar, Bars, Empty, ErrorBox, Field, ListState, Loading, LoadMore, RepoRow, Segmented, SubTabs, Switch, Time, UserLink, useSubTab } from '../components/ui';
+import { gh, type GhError, ghRaw, invalidate, useGh, useGhPages, useGqlPages, webUrl } from '../lib/api';
+import { confirmDialog, promptDialog, useAction } from '../lib/feedback';
 import type { Issue, Label, Milestone, Repo, User } from '../lib/types';
 import { compact, plural } from '../lib/util';
 import { issueSearch } from './Home';
@@ -511,15 +512,95 @@ export function Insights() {
 
 const off = (e: GhError | null) => !!e && [403, 404].includes(e.status);
 
-function Alerts({ path, empty, row }: { path: string; empty: string; row: (a: any) => { title: string; meta: string; severity?: string; url: string } }) {
-  const q = useGhPages<any>(path);
+interface AlertKind {
+  // rest path below the repo, without query
+  path: string;
+  empty: string;
+  row: (a: any) => { title: string; meta: string; severity?: string; url: string };
+  // closing state, its reason field and the choices
+  close?: { state: string; field: string; label: string; reasons: { value: string; label: string }[] };
+}
+
+const ALERTS: Record<string, AlertKind> = {
+  dependabot: {
+    path: 'dependabot/alerts',
+    empty: 'No Dependabot alerts',
+    row: (a) => ({ title: a.security_advisory?.summary ?? 'Vulnerable dependency', meta: `${a.dependency?.package?.name} (${a.dependency?.package?.ecosystem})`, severity: a.security_advisory?.severity, url: a.html_url }),
+    close: {
+      state: 'dismissed',
+      field: 'dismissed_reason',
+      label: 'Dismiss',
+      reasons: [
+        { value: 'fix_started', label: 'A fix has already been started' },
+        { value: 'no_bandwidth', label: 'No bandwidth to fix this' },
+        { value: 'tolerable_risk', label: 'Risk is tolerable to this project' },
+        { value: 'inaccurate', label: 'This alert is inaccurate or incorrect' },
+        { value: 'not_used', label: 'Vulnerable code is not actually used' },
+      ],
+    },
+  },
+  'code-scanning': {
+    path: 'code-scanning/alerts',
+    empty: 'No code scanning alerts',
+    row: (a) => ({ title: a.rule?.description ?? a.rule?.id, meta: `${a.most_recent_instance?.location?.path ?? ''} · ${a.tool?.name ?? ''}`, severity: a.rule?.security_severity_level ?? a.rule?.severity, url: a.html_url }),
+    close: {
+      state: 'dismissed',
+      field: 'dismissed_reason',
+      label: 'Dismiss',
+      reasons: [
+        { value: 'false positive', label: 'False positive' },
+        { value: "won't fix", label: "Won't fix" },
+        { value: 'used in tests', label: 'Used in tests' },
+      ],
+    },
+  },
+  'secret-scanning': {
+    path: 'secret-scanning/alerts',
+    empty: 'No secret scanning alerts',
+    row: (a) => ({ title: a.secret_type_display_name ?? a.secret_type, meta: a.resolution ? `${a.state} as ${a.resolution.replace(/_/g, ' ')}` : a.state, url: a.html_url }),
+    close: {
+      state: 'resolved',
+      field: 'resolution',
+      label: 'Close',
+      reasons: [
+        { value: 'revoked', label: 'Revoked' },
+        { value: 'false_positive', label: 'False positive' },
+        { value: 'used_in_tests', label: 'Used in tests' },
+        { value: 'wont_fix', label: "Won't fix" },
+      ],
+    },
+  },
+};
+
+function Alerts({ repo, kind }: { repo: Repo; kind: AlertKind }) {
+  const [state, setState] = useState<'open' | 'closed'>('open');
+  const api = `/repos/${repo.full_name}/${kind.path}`;
+  const closedState = kind.close?.state === 'resolved' ? 'resolved' : kind.path.startsWith('dependabot') ? 'dismissed,fixed,auto_dismissed' : 'dismissed,fixed';
+  const q = useGhPages<any>(`${api}?state=${state === 'open' ? 'open' : closedState}&per_page=50`);
+  const { busy, run } = useAction();
+  const canEdit = !!(repo.permissions?.admin || repo.permissions?.maintain || repo.permissions?.push);
   if (off(q.error)) return <Empty title="Not available">This is turned off for the repository, or your token can't read it.</Empty>;
+  const close = async (a: any) => {
+    const c = kind.close!;
+    const reason = await promptDialog({ title: `${c.label} alert #${a.number}`, label: 'Reason', options: c.reasons, confirmLabel: c.label });
+    if (!reason) return;
+    await run(async () => (await gh(`${api}/${a.number}`, { method: 'PATCH', body: { state: c.state, [c.field]: reason } }), await invalidate(api)), 'Alert closed');
+  };
+  const reopen = (a: any) => run(async () => (await gh(`${api}/${a.number}`, { method: 'PATCH', body: { state: 'open' } }), await invalidate(api)), 'Alert reopened');
   return (
     <>
+      <Segmented
+        value={state}
+        onChange={setState}
+        options={[
+          { value: 'open', label: 'Open' },
+          { value: 'closed', label: 'Closed' },
+        ]}
+      />
       <div className="card">
-        <ListState q={q} count={q.items.length} empty={empty} />
+        <ListState q={q} count={q.items.length} empty={state === 'open' ? kind.empty.replace('No', 'No open') : kind.empty.replace('No', 'No closed')} />
         {q.items.map((a) => {
-          const r = row(a);
+          const r = kind.row(a);
           return (
             <div key={a.number} className="row">
               <span className="state-icon">
@@ -534,12 +615,43 @@ function Alerts({ path, empty, row }: { path: string; empty: string; row: (a: an
                 </div>
               </div>
               {r.severity && <span className="badge">{r.severity}</span>}
+              {canEdit && kind.close && (
+                <button className="btn sm" disabled={busy} onClick={() => (a.state === 'open' ? close(a) : reopen(a))}>
+                  {a.state === 'open' ? kind.close.label : 'Reopen'}
+                </button>
+              )}
             </div>
           );
         })}
       </div>
       <LoadMore q={q} />
     </>
+  );
+}
+
+// repo-wide security switches
+function SecuritySettings({ repo }: { repo: Repo }) {
+  const api = `/repos/${repo.full_name}`;
+  const alerts = useQuery({ queryKey: ['sec', api, 'alerts'], queryFn: () => ghRaw(`${api}/vulnerability-alerts`).then(() => true, () => false) });
+  const fixes = useGh<{ enabled: boolean }>(`${api}/automated-security-fixes`);
+  const pvr = useGh<{ enabled: boolean }>(`${api}/private-vulnerability-reporting`);
+  const { busy, run } = useAction();
+  const flip = (path: string, on: boolean, done: () => unknown) => run(async () => (await gh(`${api}/${path}`, { method: on ? 'PUT' : 'DELETE' }), await done()));
+  const qc = useQueryClient();
+  const rows: [string, boolean | undefined, string, () => unknown][] = [
+    ['Dependabot alerts', alerts.data, 'vulnerability-alerts', () => qc.invalidateQueries({ queryKey: ['sec', api] })],
+    ['Dependabot security updates', fixes.data?.enabled, 'automated-security-fixes', () => invalidate(`${api}/automated-security-fixes`)],
+    ['Private vulnerability reporting', pvr.data?.enabled, 'private-vulnerability-reporting', () => invalidate(`${api}/private-vulnerability-reporting`)],
+  ];
+  return (
+    <div className="card">
+      {rows.map(([label, on, path, done]) => (
+        <div key={path} className="row compact">
+          <div className="row-main">{label}</div>
+          <Switch checked={!!on} disabled={busy || on === undefined} label={label} onChange={(v) => flip(path, v, done)} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -556,38 +668,49 @@ export function Security() {
           { id: 'code-scanning', label: 'Code scanning' },
           { id: 'secret-scanning', label: 'Secret scanning' },
           { id: 'advisories', label: 'Advisories' },
+          ...(repo.permissions?.admin ? [{ id: 'settings', label: 'Settings' }] : []),
         ]}
       />
-      {tab === 'dependabot' && (
-        <Alerts
-          path={`${api}/dependabot/alerts?state=open&per_page=50`}
-          empty="No open Dependabot alerts"
-          row={(a) => ({ title: a.security_advisory?.summary ?? 'Vulnerable dependency', meta: `${a.dependency?.package?.name} (${a.dependency?.package?.ecosystem})`, severity: a.security_advisory?.severity, url: a.html_url })}
-        />
-      )}
-      {tab === 'code-scanning' && (
-        <Alerts
-          path={`${api}/code-scanning/alerts?state=open&per_page=50`}
-          empty="No open code scanning alerts"
-          row={(a) => ({ title: a.rule?.description ?? a.rule?.id, meta: `${a.most_recent_instance?.location?.path ?? ''} · ${a.tool?.name ?? ''}`, severity: a.rule?.security_severity_level ?? a.rule?.severity, url: a.html_url })}
-        />
-      )}
-      {tab === 'secret-scanning' && (
-        <Alerts path={`${api}/secret-scanning/alerts?state=open&per_page=50`} empty="No open secret scanning alerts" row={(a) => ({ title: a.secret_type_display_name ?? a.secret_type, meta: a.state, url: a.html_url })} />
-      )}
+      {ALERTS[tab] && <Alerts key={tab} repo={repo} kind={ALERTS[tab]} />}
+      {tab === 'settings' && <SecuritySettings repo={repo} />}
       {tab === 'advisories' && (
         <>
-          <Alerts
-            path={`${api}/security-advisories?per_page=50`}
-            empty="No published advisories"
-            row={(a) => ({ title: a.summary, meta: a.ghsa_id, severity: a.severity, url: a.html_url })}
-          />
+          <AdvisoryList repo={repo} />
           <p className="muted small">
             Security policy: {policy.isSuccess ? <Link to={`/${repo.full_name}/blob/${repo.default_branch}/SECURITY.md`}>SECURITY.md</Link> : 'none in this repository'}.
           </p>
         </>
       )}
     </div>
+  );
+}
+
+function AdvisoryList({ repo }: { repo: Repo }) {
+  const q = useGhPages<any>(`/repos/${repo.full_name}/security-advisories?per_page=50`);
+  if (off(q.error)) return <Empty title="Not available">Your token can't read advisories here.</Empty>;
+  return (
+    <>
+      <div className="card">
+        <ListState q={q} count={q.items.length} empty="No advisories" />
+        {q.items.map((a) => (
+          <div key={a.ghsa_id} className="row">
+            <span className="state-icon">
+              <AlertIcon />
+            </span>
+            <div className="row-main">
+              <a className="row-link" href={a.html_url} data-external>
+                {a.summary}
+              </a>
+              <div className="meta">
+                {a.ghsa_id} · {a.state} · <Time iso={a.created_at} />
+              </div>
+            </div>
+            {a.severity && <span className="badge">{a.severity}</span>}
+          </div>
+        ))}
+      </div>
+      <LoadMore q={q} />
+    </>
   );
 }
 
