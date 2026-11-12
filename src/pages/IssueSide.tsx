@@ -27,6 +27,7 @@ export function PickerList({
   close,
   single,
   onCreate,
+  isSelected,
 }: {
   path: Source;
   toOption: (x: any) => Option;
@@ -36,7 +37,10 @@ export function PickerList({
   single?: boolean;
   // offered when the filter matches nothing exactly
   onCreate?: (text: string) => Promise<unknown>;
+  // overrides `selected` when membership is computed
+  isSelected?: (key: string) => boolean;
 }) {
+  const has = (k: string) => (isSelected ? isSelected(k) : selected.has(k));
   const q = useQuery<{ items: any[]; truncated: boolean }, Error>({
     queryKey: typeof path === 'string' ? ['gha', path, 10] : ['picker', path.key],
     queryFn: typeof path === 'string' ? () => ghAll(path, 10) : async () => ({ items: await path.load(), truncated: false }),
@@ -64,8 +68,8 @@ export function PickerList({
         {q.error && <p className="muted pad">{q.error.message}</p>}
         {!q.isLoading && !q.error && options.length === 0 && !onCreate && <p className="muted pad">Nothing to choose from.</p>}
         {options.map((o) => (
-          <button key={o.key} disabled={busy !== null} onClick={() => pick(o.key, !selected.has(o.key))}>
-            <span className="check">{busy === o.key ? <span className="spinner" /> : selected.has(o.key) ? <CheckIcon size={14} /> : null}</span>
+          <button key={o.key} disabled={busy !== null} onClick={() => pick(o.key, !has(o.key))}>
+            <span className="check">{busy === o.key ? <span className="spinner" /> : has(o.key) ? <CheckIcon size={14} /> : null}</span>
             {o.avatar && <Avatar user={o.avatar} size={18} />}
             {o.color && <span className="swatch" style={{ background: `#${o.color}` }} />}
             <span className="menu-label">{o.label}</span>

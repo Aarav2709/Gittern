@@ -33,14 +33,15 @@ import { usePref } from '../lib/store';
 import type { Issue, Label as LabelT, Milestone, PullRequest, Repo, User } from '../lib/types';
 import { copyText, plural, routeFromUrl } from '../lib/util';
 import { issueSearch, itemRoute } from './Home';
-import { Development, IssueType, Projects, Relationships, Reviewers, SideSection, transferIssue } from './IssueSide';
+import { Development, IssueType, PickerList, Projects, Relationships, Reviewers, SideSection, transferIssue } from './IssueSide';
 import { BranchCleanup, MergeBox, PullChecks, PullCommits, type PullExtras, PullFiles, useReviewApi, useReviewThreads } from './Pull';
 import { useRepo } from './Repo';
 
-export function IssueRow({ item, showRepo }: { item: Issue; showRepo?: boolean }) {
+export function IssueRow({ item, showRepo, checked, onCheck }: { item: Issue; showRepo?: boolean; checked?: boolean; onCheck?: (on: boolean) => void }) {
   const full = item.repository_url.split('/repos/')[1];
   return (
-    <div className="row">
+    <div className={`row ${checked ? 'selected' : ''}`}>
+      {onCheck && <input type="checkbox" className="row-check" checked={!!checked} onChange={(e) => onCheck(e.target.checked)} aria-label={`Select #${item.number}`} />}
       <StateIcon item={item} />
       <div className="row-main">
         <div className="row-title">
@@ -98,7 +99,99 @@ const SORTS: Record<string, string> = {
   reactions: 'Most reactions',
 };
 
-function ResultList({ query, showRepo, emptyTitle, action }: { query: string; showRepo?: boolean; emptyTitle: string; action?: ReactNode }) {
+// qualifier tokens like label:"good first issue" in a search string
+const qualifier = (key: string, value: string) => `${key}:${/\s/.test(value) ? `"${value}"` : value}`;
+function hasQualifier(text: string, key: string, value: string) {
+  return text.split(/\s+(?=(?:[^"]*"[^"]*")*[^"]*$)/).includes(qualifier(key, value));
+}
+function toggleQualifier(text: string, key: string, value: string, on: boolean, single = false) {
+  const tokens = text.split(/\s+(?=(?:[^"]*"[^"]*")*[^"]*$)/).filter(Boolean);
+  const token = qualifier(key, value);
+  const rest = tokens.filter((t) => t !== token && !(single && t.startsWith(`${key}:`)));
+  return (on ? [...rest, token] : rest).join(' ');
+}
+
+function FilterMenu({ label, text, setText, path, qkey, toOption, single }: { label: string; text: string; setText: (t: string) => void; path: string; qkey: string; toOption: (x: any) => { key: string; label: string; avatar?: User; color?: string }; single?: boolean }) {
+  const active = text.includes(`${qkey}:`);
+  return (
+    <Dropdown align="right" className={`btn ${active ? 'on' : ''}`} trigger={label}>
+      {(close) => (
+        <PickerList
+          path={path}
+          toOption={toOption}
+          selected={new Set()}
+          isSelected={(k) => hasQualifier(text, qkey, k)}
+          onToggle={(k, on) => setText(toggleQualifier(text, qkey, k, on, single))}
+          close={close}
+          single={single}
+        />
+      )}
+    </Dropdown>
+  );
+}
+
+// changes several issues at once
+function BulkBar({ repo, items, clear }: { repo: Repo; items: Issue[]; clear: () => void }) {
+  const { busy, run } = useAction();
+  const base = `/repos/${repo.full_name}`;
+  const each = (fn: (it: Issue) => Promise<unknown>, done: string) =>
+    run(async () => {
+      for (const it of items) await fn(it);
+      await invalidate('/search/issues');
+      clear();
+    }, done);
+  const anyOpen = items.some((i) => i.state === 'open');
+  return (
+    <div className="bulk-bar">
+      <span>{plural(items.length, 'selected item')}</span>
+      <span className="spacer" />
+      <button className="btn sm" disabled={busy} onClick={() => each((it) => gh(`${base}/issues/${it.number}`, { method: 'PATCH', body: { state: anyOpen ? 'closed' : 'open' } }), anyOpen ? 'Closed' : 'Reopened')}>
+        {anyOpen ? 'Close' : 'Reopen'}
+      </button>
+      <Dropdown align="right" className="btn sm" trigger="Label" disabled={busy}>
+        {(close) => (
+          <PickerList
+            path={`${base}/labels?per_page=100`}
+            toOption={(l: LabelT) => ({ key: l.name, label: l.name, color: l.color })}
+            selected={new Set((items[0]?.labels ?? []).filter((l) => items.every((i) => i.labels.some((x) => x.name === l.name))).map((l) => l.name))}
+            onToggle={(name, on) => each((it) => (on ? gh(`${base}/issues/${it.number}/labels`, { method: 'POST', body: { labels: [name] } }) : gh(`${base}/issues/${it.number}/labels/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => null)), on ? `Labelled ${name}` : `Removed ${name}`)}
+            close={close}
+            single
+          />
+        )}
+      </Dropdown>
+      <Dropdown align="right" className="btn sm" trigger="Assign" disabled={busy}>
+        {(close) => (
+          <PickerList
+            path={`${base}/assignees?per_page=100`}
+            toOption={(u: User) => ({ key: u.login, label: u.login, avatar: u })}
+            selected={new Set(items[0]?.assignees.filter((a) => items.every((i) => i.assignees.some((x) => x.login === a.login))).map((a) => a.login) ?? [])}
+            onToggle={(login, on) => each((it) => gh(`${base}/issues/${it.number}/assignees`, { method: on ? 'POST' : 'DELETE', body: { assignees: [login] } }), on ? `Assigned ${login}` : `Unassigned ${login}`)}
+            close={close}
+            single
+          />
+        )}
+      </Dropdown>
+      <Dropdown align="right" className="btn sm" trigger="Milestone" disabled={busy}>
+        {(close) => (
+          <PickerList
+            path={`${base}/milestones?state=open&per_page=100`}
+            toOption={(m: Milestone) => ({ key: String(m.number), label: m.title })}
+            selected={new Set()}
+            onToggle={(num, on) => each((it) => gh(`${base}/issues/${it.number}`, { method: 'PATCH', body: { milestone: on ? Number(num) : null } }), 'Milestone set')}
+            close={close}
+            single
+          />
+        )}
+      </Dropdown>
+      <button className="btn sm" onClick={clear}>
+        Clear
+      </button>
+    </div>
+  );
+}
+
+function ResultList({ query, showRepo, emptyTitle, action, repo }: { query: string; showRepo?: boolean; emptyTitle: string; action?: ReactNode; repo?: Repo }) {
   const [sp, setSp] = useSearchParams();
   const state = sp.get('state') === 'closed' ? 'closed' : 'open';
   const other = state === 'open' ? 'closed' : 'open';
@@ -115,6 +208,11 @@ function ResultList({ query, showRepo, emptyTitle, action }: { query: string; sh
     else next.delete(key);
     setSp(next);
   };
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  useEffect(() => setPicked(new Set()), [query, state, text]);
+  const canBulk = !!repo && !!(repo.permissions?.triage || repo.permissions?.push);
+  const selectedItems = list.items.filter((i) => picked.has(i.number));
+  const setText = (t: string) => setParam('q', t.trim() || null);
 
   return (
     <div className="stack">
@@ -128,6 +226,14 @@ function ResultList({ query, showRepo, emptyTitle, action }: { query: string; sh
           ]}
         />
         <QueryBox placeholder="Filter, e.g. label:bug author:octocat" />
+        {repo && (
+          <>
+            <FilterMenu label="Author" text={text} setText={setText} path={`/repos/${repo.full_name}/contributors?per_page=100`} qkey="author" toOption={(u: User) => ({ key: u.login, label: u.login, avatar: u })} single />
+            <FilterMenu label="Labels" text={text} setText={setText} path={`/repos/${repo.full_name}/labels?per_page=100`} qkey="label" toOption={(l: LabelT) => ({ key: l.name, label: l.name, color: l.color })} />
+            <FilterMenu label="Assignee" text={text} setText={setText} path={`/repos/${repo.full_name}/assignees?per_page=100`} qkey="assignee" toOption={(u: User) => ({ key: u.login, label: u.login, avatar: u })} single />
+            <FilterMenu label="Milestone" text={text} setText={setText} path={`/repos/${repo.full_name}/milestones?state=all&per_page=100`} qkey="milestone" toOption={(m: Milestone) => ({ key: m.title, label: m.title })} single />
+          </>
+        )}
         <Dropdown align="right" trigger={`Sort: ${SORTS[sort]}`}>
           {(close) => (
             <div className="menu" onClick={close}>
@@ -142,10 +248,36 @@ function ResultList({ query, showRepo, emptyTitle, action }: { query: string; sh
         </Dropdown>
         {action}
       </div>
+      {selectedItems.length > 0 && repo && <BulkBar repo={repo} items={selectedItems} clear={() => setPicked(new Set())} />}
       <div className="card">
+        {canBulk && list.items.length > 0 && (
+          <label className="row compact check-row bulk-all">
+            <input
+              type="checkbox"
+              checked={picked.size > 0 && list.items.every((i) => picked.has(i.number))}
+              onChange={(e) => setPicked(e.target.checked ? new Set(list.items.map((i) => i.number)) : new Set())}
+            />
+            <span className="muted small">Select all loaded</span>
+          </label>
+        )}
         <ListState q={list} count={list.items.length} empty={emptyTitle} />
         {list.items.map((it) => (
-          <IssueRow key={it.id} item={it} showRepo={showRepo} />
+          <IssueRow
+            key={it.id}
+            item={it}
+            showRepo={showRepo}
+            checked={picked.has(it.number)}
+            onCheck={
+              canBulk
+                ? (on) => {
+                    const next = new Set(picked);
+                    if (on) next.add(it.number);
+                    else next.delete(it.number);
+                    setPicked(next);
+                  }
+                : undefined
+            }
+          />
         ))}
       </div>
       <LoadMore q={list} />
@@ -158,6 +290,7 @@ export function IssueList({ kind }: { kind: 'issue' | 'pr' }) {
   return (
     <ResultList
       key={kind}
+      repo={repo}
       query={`repo:${repo.full_name} is:${kind}`}
       emptyTitle={kind === 'pr' ? 'No pull requests match' : 'No issues match'}
       action={

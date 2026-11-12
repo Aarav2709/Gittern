@@ -630,3 +630,8 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
   .split-btn > .btn, .split-btn > .dropdown > .btn { height: 36px; }
 }
 .review-dismiss { align-self: flex-end; }
+.row.selected { background: var(--active); }
+.row-check { margin-top: 3px; flex-shrink: 0; }
+.bulk-all { cursor: pointer; }
+.bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.btn.on { background: var(--active); }

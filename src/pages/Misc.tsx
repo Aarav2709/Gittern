@@ -742,7 +742,7 @@ export function Search() {
   );
 }
 
-const tokenUrl = (host: string) => `https://${host}/settings/tokens/new?scopes=repo,read:org,notifications,gist,user,workflow,read:project&description=Gittern`;
+const tokenUrl = (host: string) => `https://${host}/settings/tokens/new?scopes=repo,read:org,notifications,gist,user,workflow,project&description=Gittern`;
 
 function DeviceFlow({ api }: { api: SignInApi }) {
   const [code, setCode] = useState<DeviceCode | null>(null);
