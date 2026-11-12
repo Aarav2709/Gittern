@@ -800,7 +800,7 @@ export function Search() {
   );
 }
 
-const tokenUrl = (host: string) => `https://${host}/settings/tokens/new?scopes=repo,admin:org,notifications,gist,user,workflow,project,delete_repo,codespace,admin:public_key,admin:gpg_key,admin:ssh_signing_key,write:discussion&description=Gittern`;
+const tokenUrl = (host: string) => `https://${host}/settings/tokens/new?scopes=repo,admin:org,notifications,gist,user,workflow,project,delete_repo,codespace,admin:public_key,admin:gpg_key,admin:ssh_signing_key,write:discussion,admin:org_hook,read:packages,delete:packages&description=Gittern`;
 
 function DeviceFlow({ api }: { api: SignInApi }) {
   const [code, setCode] = useState<DeviceCode | null>(null);

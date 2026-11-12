@@ -15,7 +15,9 @@ import { useAuth } from '../lib/auth';
 import type { Repo, User } from '../lib/types';
 import { compact } from '../lib/util';
 import { GistList } from './Gists';
-import { BlockButton, OrgPeople, OrgTeams } from './Org';
+import { BlockButton, OrgPeople, OrgSettings, OrgTeams, useOrgAdmin } from './Org';
+import { Packages } from './Packages';
+import { OwnerProjects } from './Project';
 
 const PROFILE_QUERY = `
 query($login: String!) {
@@ -219,6 +221,7 @@ export function Profile() {
   const tab = sp.get('tab') ?? 'overview';
   const user = useGh<User>(`/users/${owner}`);
   const { viewer } = useAuth();
+  const orgAdmin = useOrgAdmin(user.data?.type === 'Organization' ? owner : '');
 
   if (user.isLoading) return <Loading />;
   if (user.error) return <ErrorBox error={user.error} />;
@@ -238,6 +241,9 @@ export function Profile() {
           { id: 'people', label: 'People' },
           { id: 'teams', label: 'Teams' },
         ]),
+    { id: 'projects', label: 'Projects' },
+    { id: 'packages', label: 'Packages' },
+    ...(!isUser && orgAdmin ? [{ id: 'settings', label: 'Settings' }] : []),
   ];
   const blog = u.blog && (/^https?:\/\//.test(u.blog) ? u.blog : `https://${u.blog}`);
 
@@ -329,6 +335,9 @@ export function Profile() {
         {tab === 'following' && <UserList path={`/users/${u.login}/following?per_page=50`} empty="Not following anyone" />}
         {tab === 'people' && <OrgPeople org={u.login} />}
         {tab === 'teams' && <OrgTeams org={u.login} />}
+        {tab === 'projects' && <OwnerProjects owner={u.login} canCreate={u.login === viewer.login || orgAdmin} />}
+        {tab === 'packages' && <Packages owner={u.login} isOrg={!isUser} canManage={u.login === viewer.login || orgAdmin} />}
+        {tab === 'settings' && orgAdmin && <OrgSettings org={u.login} />}
       </section>
     </div></div>
   );

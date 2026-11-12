@@ -110,7 +110,7 @@ function General({ repo }: { repo: Repo }) {
 }
 
 // a settings list with an add form and a remove button per row
-function Managed<T>({
+export function Managed<T>({
   title,
   path,
   pick,
@@ -469,7 +469,7 @@ function Automation({ repo }: { repo: Repo }) {
 }
 
 // ping, pause and delivery history for one webhook
-function HookActions({ api, active, refresh }: { api: string; active: boolean; refresh: () => Promise<unknown> }) {
+export function HookActions({ api, active, refresh }: { api: string; active: boolean; refresh: () => Promise<unknown> }) {
   const { busy, run } = useAction();
   const [open, setOpen] = useState(false);
   return (
@@ -520,7 +520,7 @@ function Deliveries({ api }: { api: string }) {
 }
 
 // secrets are sealed with the repository's public key before upload
-function Secrets({ api, title }: { api: string; title: string }) {
+export function Secrets({ api, title, extra }: { api: string; title: string; extra?: Record<string, unknown> }) {
   return (
     <Managed<{ name: string; updated_at: string }>
       title={title}
@@ -543,7 +543,7 @@ function Secrets({ api, title }: { api: string; title: string }) {
             className="btn sm"
             onClick={async () => {
               const value = await promptDialog({ title: `Update ${s.name}`, label: 'New value', multiline: true, confirmLabel: 'Update secret' });
-              if (value) await putSecret(api, s.name, value).then(refresh, toastError);
+              if (value) await putSecret(api, s.name, value, extra).then(refresh, toastError);
             }}
           >
             Update
@@ -559,7 +559,7 @@ function Secrets({ api, title }: { api: string; title: string }) {
                 { key: 'name', label: 'Name', placeholder: 'MY_SECRET' },
                 { key: 'value', label: 'Value', area: true },
               ],
-              submit: (v) => putSecret(api, v.name.trim(), v.value),
+              submit: (v) => putSecret(api, v.name.trim(), v.value, extra),
             }
           : undefined
       }
@@ -567,10 +567,10 @@ function Secrets({ api, title }: { api: string; title: string }) {
   );
 }
 
-async function putSecret(api: string, name: string, value: string) {
+async function putSecret(api: string, name: string, value: string, extra?: Record<string, unknown>) {
   const key = await gh<{ key_id: string; key: string }>(`${api}/secrets/public-key`);
   const encrypted_value = await invoke<string>('seal_secret', { key: key.key, value });
-  await gh(`${api}/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { encrypted_value, key_id: key.key_id } });
+  await gh(`${api}/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { encrypted_value, key_id: key.key_id, ...extra } });
 }
 
 function Pages({ repo }: { repo: Repo }) {

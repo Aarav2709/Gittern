@@ -1,6 +1,7 @@
-import { KebabHorizontalIcon, MailIcon, PeopleIcon, PersonIcon } from '@primer/octicons-react';
+import { KebabHorizontalIcon, KeyIcon, MailIcon, PeopleIcon, PersonIcon, WebhookIcon } from '@primer/octicons-react';
 import { useState } from 'react';
-import { Avatar, Dropdown, ListState, LoadMore, Modal, Time, UserLink } from '../components/ui';
+import { Avatar, Dropdown, Field, ListState, LoadMore, Modal, Switch, Time, UserLink } from '../components/ui';
+import { HookActions, Managed, Secrets } from './Manage';
 import { gh, invalidate, useGh, useGhAll, useGhPages } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { confirmDialog, promptDialog, useAction } from '../lib/feedback';
@@ -9,7 +10,7 @@ import { plural } from '../lib/util';
 
 // whether the viewer administers this org
 export function useOrgAdmin(org: string) {
-  const m = useGh<{ role: string; state: string }>(`/user/memberships/orgs/${org}`);
+  const m = useGh<{ role: string; state: string }>(org && `/user/memberships/orgs/${org}`);
   return m.data?.role === 'admin' && m.data.state === 'active';
 }
 
@@ -291,5 +292,153 @@ export function BlockButton({ login }: { login: string }) {
     >
       <PersonIcon size={12} /> {blocked ? 'Unblock' : 'Block'}
     </button>
+  );
+}
+
+const ORG_FIELDS: [string, string][] = [
+  ['name', 'Display name'],
+  ['description', 'Description'],
+  ['email', 'Public email'],
+  ['blog', 'Website'],
+  ['location', 'Location'],
+  ['twitter_username', 'X username'],
+  ['billing_email', 'Billing email'],
+];
+
+const ORG_SWITCHES: [string, string][] = [
+  ['members_can_create_public_repositories', 'Members can create public repositories'],
+  ['members_can_create_private_repositories', 'Members can create private repositories'],
+  ['members_can_fork_private_repositories', 'Members can fork private repositories'],
+  ['web_commit_signoff_required', 'Require sign-off on web commits'],
+  ['has_organization_projects', 'Organization projects'],
+  ['has_repository_projects', 'Repository projects'],
+];
+
+// profile, member privileges and automation for an org
+export function OrgSettings({ org }: { org: string }) {
+  const api = `/orgs/${org}`;
+  const q = useGh<Record<string, any>>(api);
+  const [form, setForm] = useState<Record<string, string> | null>(null);
+  const { busy, run } = useAction();
+  const save = (body: Record<string, unknown>, done = 'Saved') => run(async () => (await gh(api, { method: 'PATCH', body }), await invalidate(api)), done);
+  if (!q.data) return <ListState q={q} count={0} empty="" />;
+  const o = q.data;
+  const values = form ?? Object.fromEntries(ORG_FIELDS.map(([k]) => [k, o[k] ?? '']));
+  return (
+    <div className="stack">
+      <form
+        className="card form-section form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save(values, 'Profile saved').then(() => setForm(null));
+        }}
+      >
+        <strong>Profile</strong>
+        {ORG_FIELDS.map(([k, label]) => (
+          <Field key={k} label={label}>
+            <input className="input" value={values[k]} onChange={(e) => setForm({ ...values, [k]: e.target.value })} />
+          </Field>
+        ))}
+        <div className="form-foot">
+          <span className="spacer" />
+          <button className="btn primary" disabled={busy || !form}>
+            Save profile
+          </button>
+        </div>
+      </form>
+      <section className="card">
+        <div className="card-head">
+          <strong>Member privileges</strong>
+        </div>
+        <div className="row compact">
+          <div className="row-main">Base permission on repositories</div>
+          <select className="input select" value={o.default_repository_permission ?? 'read'} disabled={busy} onChange={(e) => save({ default_repository_permission: e.target.value })}>
+            <option value="none">No permission</option>
+            <option value="read">Read</option>
+            <option value="write">Write</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        {ORG_SWITCHES.filter(([k]) => k in o).map(([k, label]) => (
+          <div key={k} className="row compact">
+            <div className="row-main">{label}</div>
+            <Switch checked={!!o[k]} disabled={busy} label={label} onChange={(v) => save({ [k]: v })} />
+          </div>
+        ))}
+      </section>
+      <Managed<{ id: number; active: boolean; events: string[]; config: { url?: string } }>
+        title="Organization webhooks"
+        path={`${api}/hooks?per_page=100`}
+        rowKey={(h) => h.id}
+        icon={<WebhookIcon />}
+        empty="No webhooks"
+        render={(h) => (
+          <>
+            <div className="row-title">
+              {h.config.url} {!h.active && <span className="badge">Inactive</span>}
+            </div>
+            <div className="meta">{h.events.join(', ')}</div>
+          </>
+        )}
+        actions={(h, refresh) => <HookActions api={`${api}/hooks/${h.id}`} active={h.active} refresh={refresh} />}
+        remove={(h) => ({ path: `${api}/hooks/${h.id}`, confirm: 'Delete this webhook?' })}
+        add={{
+          label: 'Add webhook',
+          fields: [
+            { key: 'url', label: 'Payload URL', placeholder: 'https://example.com/hook' },
+            { key: 'events', label: 'Events, comma separated', placeholder: 'push, repository  or  *', optional: true },
+            { key: 'secret', label: 'Secret', optional: true, secret: true },
+          ],
+          submit: (v) =>
+            gh(`${api}/hooks`, {
+              method: 'POST',
+              body: { name: 'web', config: { url: v.url.trim(), content_type: 'json', ...(v.secret ? { secret: v.secret } : {}) }, events: v.events.trim() ? v.events.split(',').map((e) => e.trim()) : ['push'] },
+            }),
+        }}
+      />
+      <Secrets api={`${api}/actions`} title="Organization Actions secrets" extra={{ visibility: 'all' }} />
+      <Managed<{ name: string; value: string; visibility: string }>
+        title="Organization Actions variables"
+        path={`${api}/actions/variables?per_page=100`}
+        pick={(d) => d.variables}
+        rowKey={(v) => v.name}
+        icon={<KeyIcon />}
+        empty="No variables"
+        render={(v) => (
+          <div className="row-title">
+            <code>{v.name}</code> <span className="muted">{v.value}</span> <span className="badge">{v.visibility}</span>
+          </div>
+        )}
+        remove={(v) => ({ path: `${api}/actions/variables/${v.name}`, confirm: `Delete the variable ${v.name}?` })}
+        add={{
+          label: 'Add variable',
+          fields: [
+            { key: 'name', label: 'Name', placeholder: 'MY_VARIABLE' },
+            { key: 'value', label: 'Value' },
+            { key: 'visibility', label: 'Available to', options: [{ value: 'all', label: 'All repositories' }, { value: 'private', label: 'Private repositories' }] },
+          ],
+          submit: (v) => gh(`${api}/actions/variables`, { method: 'POST', body: { name: v.name.trim(), value: v.value, visibility: v.visibility } }),
+        }}
+      />
+      <Managed<User>
+        title="Blocked users"
+        path={`${api}/blocks?per_page=100`}
+        rowKey={(u) => u.id}
+        icon={<PersonIcon />}
+        empty="Nobody is blocked"
+        render={(u) => <UserLink user={u} />}
+        remove={(u) => ({ path: `${api}/blocks/${u.login}`, confirm: `Unblock ${u.login}?` })}
+        add={{ label: 'Block user', fields: [{ key: 'login', label: 'Username' }], submit: (v) => gh(`${api}/blocks/${encodeURIComponent(v.login.trim().replace(/^@/, ''))}`, { method: 'PUT' }) }}
+      />
+      <Managed<User>
+        title="Outside collaborators"
+        path={`${api}/outside_collaborators?per_page=100`}
+        rowKey={(u) => u.id}
+        icon={<PersonIcon />}
+        empty="No outside collaborators"
+        render={(u) => <UserLink user={u} />}
+        remove={(u) => ({ path: `${api}/outside_collaborators/${u.login}`, confirm: `Remove ${u.login} from every repository in ${org}?` })}
+      />
+    </div>
   );
 }

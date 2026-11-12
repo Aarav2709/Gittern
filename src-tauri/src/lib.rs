@@ -428,7 +428,7 @@ async fn device_start(state: State<'_, AppState>) -> Result<DeviceCode, String> 
         .http
         .post(format!("https://{}/login/device/code", state.host()))
         .header("Accept", "application/json")
-        .form(&[("client_id", id.as_str()), ("scope", "repo admin:org notifications gist user workflow project delete_repo codespace admin:public_key admin:gpg_key admin:ssh_signing_key write:discussion")])
+        .form(&[("client_id", id.as_str()), ("scope", "repo admin:org admin:org_hook notifications gist user workflow project delete_repo codespace admin:public_key admin:gpg_key admin:ssh_signing_key write:discussion read:packages delete:packages")])
         .send()
         .await
         .map_err(|e| format!("Network error: {e}"))?;
