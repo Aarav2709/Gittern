@@ -10,7 +10,7 @@ import { useAction } from '../lib/feedback';
 import { usePref } from '../lib/store';
 import type { CommitEntry, User } from '../lib/types';
 import { plural } from '../lib/util';
-import { Comment } from './Issues';
+import { Comment, toggleReaction } from './Issues';
 import { BranchPicker, useRefPath, useRepo } from './Repo';
 
 const Sha = ({ sha }: { sha: string }) => <CopyButton text={sha} label={sha.slice(0, 7)} className="btn sm mono" />;
@@ -90,7 +90,7 @@ export function Commit() {
   const { sha } = useParams();
   const api = `/repos/${repo.full_name}/commits/${sha}`;
   const q = useGh<CommitEntry>(api);
-  const comments = useGhPages<{ id: number; user: User; body: string; body_html?: string; created_at: string; html_url: string }>(`${api}/comments?per_page=100`, { accept: ACCEPT.full });
+  const comments = useGhPages<{ id: number; user: User; body: string; body_html?: string; created_at: string; html_url: string; reactions?: Record<string, any> }>(`${api}/comments?per_page=100`, { accept: ACCEPT.full });
   const pulls = useGh<{ number: number; title: string }[]>(`${api}/pulls`);
   const [layout, setLayout] = usePref('diff-layout', 'unified');
   const [text, setText] = useState('');
@@ -154,6 +154,7 @@ export function Commit() {
             link={cm.html_url}
             onSave={cm.user?.login === viewer.login ? (b) => act(() => gh(commentApi(cm.id), { method: 'PATCH', body: { body: b } })) : undefined}
             onDelete={cm.user?.login === viewer.login || repo.permissions?.push ? () => act(() => gh(commentApi(cm.id), { method: 'DELETE' })) : undefined}
+            onReact={(content) => act(() => toggleReaction(`${commentApi(cm.id)}/reactions`, content))}
           />
         ))}
         <div className="composer">
