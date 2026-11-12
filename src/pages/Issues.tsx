@@ -20,6 +20,7 @@ import {
   SearchIcon,
   SmileyIcon,
   TagIcon,
+  TriangleDownIcon,
 } from '@primer/octicons-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -114,7 +115,7 @@ function toggleQualifier(text: string, key: string, value: string, on: boolean, 
 function FilterMenu({ label, text, setText, path, qkey, toOption, single }: { label: string; text: string; setText: (t: string) => void; path: string; qkey: string; toOption: (x: any) => { key: string; label: string; avatar?: User; color?: string }; single?: boolean }) {
   const active = text.includes(`${qkey}:`);
   return (
-    <Dropdown align="right" className={`btn ${active ? 'on' : ''}`} trigger={label}>
+    <Dropdown align="right" className={`btn ${active ? 'on' : ''}`} trigger={<>{label} <TriangleDownIcon size={12} /></>}>
       {(close) => (
         <PickerList
           path={path}
@@ -229,7 +230,7 @@ function ResultList({ query, showRepo, emptyTitle, action, repo }: { query: stri
         {repo && (
           <>
             <FilterMenu label="Author" text={text} setText={setText} path={`/repos/${repo.full_name}/contributors?per_page=100`} qkey="author" toOption={(u: User) => ({ key: u.login, label: u.login, avatar: u })} single />
-            <FilterMenu label="Labels" text={text} setText={setText} path={`/repos/${repo.full_name}/labels?per_page=100`} qkey="label" toOption={(l: LabelT) => ({ key: l.name, label: l.name, color: l.color })} />
+            <FilterMenu label="Label" text={text} setText={setText} path={`/repos/${repo.full_name}/labels?per_page=100`} qkey="label" toOption={(l: LabelT) => ({ key: l.name, label: l.name, color: l.color })} />
             <FilterMenu label="Assignee" text={text} setText={setText} path={`/repos/${repo.full_name}/assignees?per_page=100`} qkey="assignee" toOption={(u: User) => ({ key: u.login, label: u.login, avatar: u })} single />
             <FilterMenu label="Milestone" text={text} setText={setText} path={`/repos/${repo.full_name}/milestones?state=all&per_page=100`} qkey="milestone" toOption={(m: Milestone) => ({ key: m.title, label: m.title })} single />
           </>
@@ -295,11 +296,11 @@ export function IssueList({ kind }: { kind: 'issue' | 'pr' }) {
       emptyTitle={kind === 'pr' ? 'No pull requests match' : 'No issues match'}
       action={
         <>
-          <Link className="btn" to={`/${repo.full_name}/labels`}>
-            <TagIcon /> Labels
+          <Link className="btn" to={`/${repo.full_name}/labels`} title="Manage labels" aria-label="Manage labels">
+            <TagIcon />
           </Link>
-          <Link className="btn" to={`/${repo.full_name}/milestones`}>
-            <MilestoneIcon /> Milestones
+          <Link className="btn" to={`/${repo.full_name}/milestones`} title="Manage milestones" aria-label="Manage milestones">
+            <MilestoneIcon />
           </Link>
           <Link className="btn primary" to={kind === 'issue' ? `/${repo.full_name}/issues/new` : `/${repo.full_name}/compare`}>
             {kind === 'issue' ? 'New issue' : 'New pull request'}
