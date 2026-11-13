@@ -6,6 +6,7 @@ import {
   TableIcon,
   CheckIcon,
   CodeIcon,
+  CodespacesIcon,
   DeviceDesktopIcon,
   CopyIcon,
   EyeIcon,
@@ -42,7 +43,7 @@ import { langColor } from '../lib/langs';
 import type { Repo } from '../lib/types';
 import { FundingButton } from './Sponsors';
 import { toggleFavorite, usePref, useRepoList, visitRepo } from '../lib/store';
-import { compact, copyText, encPath, timeAgo } from '../lib/util';
+import { compact, copyText, encPath, openExternal, timeAgo } from '../lib/util';
 
 export const useRepo = () => useOutletContext<{ repo: Repo; counts: any }>();
 
@@ -509,6 +510,23 @@ function CloneMenu({ repo, onFind, addTo }: { repo: Repo; onFind: () => void; ad
             </div>
           ))}
           <LocalActions repo={repo} close={close} />
+          {repo.permissions?.push && (
+            <button
+              className="btn block"
+              onClick={async () => {
+                close();
+                try {
+                  const cs = await gh<{ web_url: string }>(`/repos/${repo.full_name}/codespaces`, { method: 'POST', body: { ref: repo.default_branch } });
+                  toast('Codespace starting');
+                  openExternal(cs.web_url);
+                } catch (e) {
+                  toastError(e);
+                }
+              }}
+            >
+              <CodespacesIcon /> Create a codespace
+            </button>
+          )}
           <a className="small" href={`${repo.html_url}/archive/refs/heads/${repo.default_branch}.zip`} data-external>
             Download ZIP
           </a>

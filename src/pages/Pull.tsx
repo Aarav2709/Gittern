@@ -273,33 +273,68 @@ function useChecks(repo: Repo, sha: string) {
   });
 }
 
+// actions jobs share their id with the check run
+const isActions = (c: CheckRun) => (c as any).app?.slug === 'github-actions';
+const runRoute = (repo: Repo, c: CheckRun) => {
+  const m = /\/actions\/runs\/(\d+)/.exec(c.details_url ?? c.html_url ?? '');
+  return m ? `/${repo.full_name}/actions/runs/${m[1]}` : null;
+};
+
 export function PullChecks({ repo, pr }: { repo: Repo; pr: PullRequest }) {
   const checks = useChecks(repo, pr.head.sha);
   const runs = checks.data?.check_runs ?? [];
+  const { busy, run } = useAction();
+  const canRerun = !!repo.permissions?.push;
+  const failed = runs.filter((c) => ['failure', 'cancelled', 'timed_out', 'action_required'].includes(c.conclusion ?? ''));
+  const rerun = (c: CheckRun) => gh(isActions(c) ? `/repos/${repo.full_name}/actions/jobs/${c.id}/rerun` : `/repos/${repo.full_name}/check-runs/${c.id}/rerequest`, { method: 'POST' });
+  const after = () => invalidate(`/repos/${repo.full_name}/commits/${pr.head.sha}/check-runs`);
   return (
     <div className="stack">
+      {canRerun && failed.length > 0 && (
+        <div className="toolbar">
+          <span className="muted">{failed.length} failing</span>
+          <span className="spacer" />
+          <button className="btn" disabled={busy} onClick={() => run(async () => (await Promise.all(failed.map(rerun)), await after()), 'Re-running failed checks')}>
+            Re-run failed checks
+          </button>
+        </div>
+      )}
       <ListState q={checks} count={runs.length} empty="No checks ran on this commit" />
       {runs.length > 0 && (
         <div className="card">
-          {runs.map((c) => (
-            <div key={c.id} className="row compact">
-              <span className="state-icon">
-                <CheckIcons c={c} />
-              </span>
-              <div className="row-main">
-                <a className="row-link" href={c.html_url ?? c.details_url ?? undefined}>
-                  {c.name}
-                </a>
-                <div className="meta">
-                  {c.app?.name}
-                  {c.output?.title && <span>{c.output.title}</span>}
+          {runs.map((c) => {
+            const internal = runRoute(repo, c);
+            return (
+              <div key={c.id} className="row compact">
+                <span className="state-icon">
+                  <CheckIcons c={c} />
+                </span>
+                <div className="row-main">
+                  {internal ? (
+                    <Link className="row-link" to={internal}>
+                      {c.name}
+                    </Link>
+                  ) : (
+                    <a className="row-link" href={c.html_url ?? c.details_url ?? undefined}>
+                      {c.name}
+                    </a>
+                  )}
+                  <div className="meta">
+                    {c.app?.name}
+                    {c.output?.title && <span>{c.output.title}</span>}
+                  </div>
                 </div>
+                <span className="row-side">
+                  {c.started_at && c.completed_at ? duration(+new Date(c.completed_at) - +new Date(c.started_at)) : c.status.replace(/_/g, ' ')}
+                </span>
+                {canRerun && c.status === 'completed' && (
+                  <button className="btn sm" disabled={busy} onClick={() => run(async () => (await rerun(c), await after()), `Re-running ${c.name}`)}>
+                    Re-run
+                  </button>
+                )}
               </div>
-              <span className="row-side">
-                {c.started_at && c.completed_at ? duration(+new Date(c.completed_at) - +new Date(c.started_at)) : c.status.replace(/_/g, ' ')}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
