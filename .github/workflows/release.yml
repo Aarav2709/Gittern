@@ -29,6 +29,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+      # the app compares itself to the latest release tag, so they must match
+      - name: check version matches tag
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          for v in "$(node -p "require('./package.json').version")" "$(node -p "require('./src-tauri/tauri.conf.json').version")"; do
+            [ "v$v" = "$tag" ] || { echo "version $v does not match tag $tag"; exit 1; }
+          done
       - if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf
       - uses: actions/setup-node@v4
