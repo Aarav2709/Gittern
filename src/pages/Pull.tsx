@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { buildThreads, DiffFile, type PendingComment, type ReviewApi, type Thread } from '../components/Diff';
 import { Avatar, Dropdown, ListState, LoadMore, Segmented, Time } from '../components/ui';
-import { ACCEPT, gh, gql, invalidate, useGh, useGhPages } from '../lib/api';
+import { ACCEPT, gh, gql, invalidate, invalidateGql, useGh, useGhPages, useGql } from '../lib/api';
 import { confirmDialog, toast, useAction } from '../lib/feedback';
 import { usePref } from '../lib/store';
 import type { CommitEntry, DiffFileEntry, PullRequest, Repo, ReviewComment } from '../lib/types';
@@ -529,6 +529,45 @@ export function BranchCleanup({ repo, pr, refresh }: { repo: Repo; pr: PullReque
         >
           Delete branch
         </button>
+      </div>
+    </div>
+  );
+}
+
+const QUEUE_QUERY = `
+query($o: String!, $n: String!, $b: String!, $num: Int!) {
+  repository(owner: $o, name: $n) {
+    mergeQueue(branch: $b) { id entries { totalCount } }
+    pullRequest(number: $num) { id isInMergeQueue mergeQueueEntry { id position state } }
+  }
+}`;
+
+// adds or removes the pull request from the base branch's merge queue
+export function MergeQueue({ repo, pr, refresh }: { repo: Repo; pr: PullRequest; refresh: () => Promise<unknown> }) {
+  const q = useGql<any>('merge-queue', QUEUE_QUERY, { o: repo.owner.login, n: repo.name, b: pr.base.ref, num: pr.number });
+  const { busy, run } = useAction();
+  const queue = q.data?.repository?.mergeQueue;
+  const p = q.data?.repository?.pullRequest;
+  if (!queue || !p) return null;
+  const done = () => Promise.all([invalidateGql('merge-queue'), refresh()]);
+  return (
+    <div className="card merge-box">
+      <div className="merge-row">
+        <span>
+          {p.isInMergeQueue
+            ? `In the merge queue at position ${p.mergeQueueEntry?.position ?? '?'} (${(p.mergeQueueEntry?.state ?? '').toLowerCase().replace('_', ' ')}).`
+            : `${pr.base.ref} uses a merge queue with ${queue.entries.totalCount} waiting.`}
+        </span>
+        <span className="spacer" />
+        {p.isInMergeQueue ? (
+          <button className="btn" disabled={busy} onClick={() => run(async () => (await gql('mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }', { id: p.id }), await done()), 'Removed from the queue')}>
+            Remove from queue
+          </button>
+        ) : (
+          <button className="btn primary" disabled={busy || pr.draft} onClick={() => run(async () => (await gql('mutation($id: ID!) { enqueuePullRequest(input: { pullRequestId: $id }) { clientMutationId } }', { id: p.id }), await done()), 'Added to the merge queue')}>
+            Merge when ready
+          </button>
+        )}
       </div>
     </div>
   );

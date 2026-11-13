@@ -36,7 +36,7 @@ import type { Issue, Label as LabelT, Milestone, PullRequest, Repo, User } from 
 import { copyText, plural, routeFromUrl } from '../lib/util';
 import { issueSearch, itemRoute } from './Home';
 import { Development, IssueType, PickerList, Projects, Relationships, Reviewers, SideSection, transferIssue } from './IssueSide';
-import { BranchCleanup, MergeBox, PullChecks, PullCommits, type PullExtras, PullFiles, useReviewApi, useReviewThreads } from './Pull';
+import { BranchCleanup, MergeBox, MergeQueue, PullChecks, PullCommits, type PullExtras, PullFiles, useReviewApi, useReviewThreads } from './Pull';
 import { useRepo } from './Repo';
 
 export function IssueRow({ item, showRepo, checked, onCheck }: { item: Issue; showRepo?: boolean; checked?: boolean; onCheck?: (on: boolean) => void }) {
@@ -902,6 +902,7 @@ export function IssueDetail({ view }: { view?: View }) {
             })}
             <LoadMore q={timeline} />
 
+            {isPr && pr.data && open && perms.push && <MergeQueue repo={repo} pr={pr.data} refresh={refresh} />}
             {isPr && pr.data && open && perms.push && <MergeBox repo={repo} pr={pr.data} extras={extras} refresh={refresh} />}
             {isPr && pr.data && !open && perms.push && <BranchCleanup repo={repo} pr={pr.data} refresh={refresh} />}
 
