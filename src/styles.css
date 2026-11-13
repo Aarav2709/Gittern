@@ -658,3 +658,5 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .tier:hover { text-decoration: none; background: var(--hover); }
 .menu .menu-rich { align-items: flex-start; padding-block: 6px; }
 .small.block, .muted.block { display: block; }
+.form-group { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; }
+.form-group legend { font-weight: 500; margin-bottom: 4px; }

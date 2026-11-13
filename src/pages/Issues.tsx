@@ -21,7 +21,9 @@ import {
   TagIcon,
   TriangleDownIcon,
 } from '@primer/octicons-react';
+import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { parse as parseYaml } from 'yaml';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { type PendingComment, ThreadView } from '../components/Diff';
 import { MarkdownEditor, quoteReply } from '../components/Editor';
@@ -1133,8 +1135,121 @@ export function parseTemplate(text: string, fallbackName: string): Template {
 
 function useTemplates(repo: Repo) {
   const dir = useGh<any[]>(`/repos/${repo.full_name}/contents/.github/ISSUE_TEMPLATE`, { staleTime: 10 * 60_000 });
-  const files = (Array.isArray(dir.data) ? dir.data : []).filter((f) => /\.md$/i.test(f.name));
-  return { files, done: !dir.isLoading };
+  const all = Array.isArray(dir.data) ? dir.data : [];
+  const files = all.filter((f) => /\.(md|ya?ml)$/i.test(f.name) && !/^config\.ya?ml$/i.test(f.name));
+  const configFile = all.find((f) => /^config\.ya?ml$/i.test(f.name));
+  const config = useGh<string>(configFile && `/repos/${repo.full_name}/contents/${configFile.path}`, { accept: ACCEPT.raw, text: true, staleTime: 10 * 60_000 });
+  let links: { name: string; url: string; about?: string }[] = [];
+  try {
+    links = config.data ? (parseYaml(config.data)?.contact_links ?? []) : [];
+  } catch {
+    links = [];
+  }
+  return { files, links, done: !dir.isLoading };
+}
+
+export interface FormField {
+  type: 'markdown' | 'textarea' | 'input' | 'dropdown' | 'checkboxes';
+  id?: string;
+  attributes: { label?: string; description?: string; placeholder?: string; value?: string; options?: (string | { label: string; required?: boolean })[]; multiple?: boolean; render?: string };
+  validations?: { required?: boolean };
+}
+
+export interface IssueForm {
+  name: string;
+  title?: string;
+  labels: string[];
+  assignees: string[];
+  body: FormField[];
+}
+
+const asList = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
+
+// a github issue form, from its yaml
+export function parseForm(text: string, fallbackName: string): IssueForm {
+  const y = parseYaml(text) ?? {};
+  return { name: y.name ?? fallbackName, title: y.title, labels: asList(y.labels), assignees: asList(y.assignees), body: Array.isArray(y.body) ? y.body.filter((b: any) => b?.type) : [] };
+}
+
+// answers in the same markdown github writes for a form
+export function formBody(form: IssueForm, answers: Record<number, any>): string {
+  return form.body
+    .map((f, i) => {
+      if (f.type === 'markdown') return null;
+      const a = answers[i];
+      let text: string;
+      if (f.type === 'checkboxes') text = (f.attributes.options ?? []).map((o, j) => `- [${a?.[j] ? 'X' : ' '}] ${typeof o === 'string' ? o : o.label}`).join('\n');
+      else if (f.type === 'dropdown') text = (Array.isArray(a) ? a.join(', ') : a) || '_No response_';
+      else text = (a ?? '').trim() ? (f.attributes.render ? `\`\`\`${f.attributes.render}\n${a}\n\`\`\`` : a) : '_No response_';
+      return `### ${f.attributes.label ?? ''}\n\n${text}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function FormFields({ form, answers, setAnswers }: { form: IssueForm; answers: Record<number, any>; setAnswers: (a: Record<number, any>) => void }) {
+  const set = (i: number, v: any) => setAnswers({ ...answers, [i]: v });
+  return (
+    <div className="stack">
+      {form.body.map((f, i) => {
+        const a = f.attributes ?? {};
+        const req = f.validations?.required;
+        const label = (
+          <>
+            {a.label}
+            {req && <span className="del-text"> *</span>}
+          </>
+        );
+        if (f.type === 'markdown') return <MarkdownText key={i} text={a.value ?? ''} />;
+        if (f.type === 'checkboxes')
+          return (
+            <fieldset key={i} className="form-group">
+              <legend>{label}</legend>
+              {a.description && <span className="muted small">{a.description}</span>}
+              {(a.options ?? []).map((o, j) => (
+                <label key={j} className="check-row">
+                  <input type="checkbox" checked={!!answers[i]?.[j]} onChange={(e) => set(i, { ...(answers[i] ?? {}), [j]: e.target.checked })} /> {typeof o === 'string' ? o : o.label}
+                </label>
+              ))}
+            </fieldset>
+          );
+        return (
+          <label key={i} className="field">
+            <span>{label}</span>
+            {a.description && <span className="muted small">{a.description}</span>}
+            {f.type === 'dropdown' ? (
+              <select className="input" multiple={a.multiple} value={answers[i] ?? (a.multiple ? [] : '')} onChange={(e) => set(i, a.multiple ? [...e.target.selectedOptions].map((o) => o.value) : e.target.value)}>
+                {!a.multiple && <option value="">Choose…</option>}
+                {(a.options ?? []).map((o, j) => (
+                  <option key={j}>{String(o)}</option>
+                ))}
+              </select>
+            ) : f.type === 'textarea' ? (
+              <textarea className={`input ${a.render ? 'mono' : ''}`} rows={a.render ? 6 : 5} placeholder={a.placeholder} value={answers[i] ?? a.value ?? ''} onChange={(e) => set(i, e.target.value)} />
+            ) : (
+              <input className="input" placeholder={a.placeholder} value={answers[i] ?? a.value ?? ''} onChange={(e) => set(i, e.target.value)} />
+            )}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+// renders a markdown snippet through github
+function MarkdownText({ text }: { text: string }) {
+  const q = useQuery({ queryKey: ['md', text], queryFn: () => gh<string>('/markdown', { method: 'POST', body: { text, mode: 'gfm' }, text: true }), staleTime: Infinity });
+  return q.data ? <Markdown html={q.data} /> : null;
+}
+
+// required fields that are still empty
+function missing(form: IssueForm, answers: Record<number, any>) {
+  return form.body.filter((f, i) => {
+    if (!f.validations?.required || f.type === 'markdown') return false;
+    const a = answers[i] ?? f.attributes.value;
+    if (f.type === 'checkboxes') return (f.attributes.options ?? []).some((o, j) => typeof o !== 'string' && o.required && !answers[i]?.[j]);
+    return Array.isArray(a) ? !a.length : !String(a ?? '').trim();
+  });
 }
 
 export function NewIssue() {
@@ -1151,19 +1266,36 @@ export function NewIssue() {
   const canTriage = !!(repo.permissions?.triage || repo.permissions?.push);
   const base = `/repos/${repo.full_name}`;
 
+  const [form, setForm] = useState<IssueForm | null>(null);
+  const [answers, setAnswers] = useState<Record<number, any>>({});
   const pick = (f: any) =>
     run(async () => {
-      const t = parseTemplate(await gh<string>(`${base}/contents/${f.path}`, { accept: ACCEPT.raw, text: true }), f.name.replace(/\.md$/i, ''));
+      const raw = await gh<string>(`${base}/contents/${f.path}`, { accept: ACCEPT.raw, text: true });
+      const name = f.name.replace(/\.(md|ya?ml)$/i, '');
+      if (/\.ya?ml$/i.test(f.name)) {
+        const fm = parseForm(raw, name);
+        setForm(fm);
+        setAnswers({});
+        if (fm.title && !title) setTitle(fm.title);
+        if (fm.labels.length) setLabels(fm.labels);
+        if (fm.assignees.length) setAssignees(fm.assignees);
+        return;
+      }
+      setForm(null);
+      const t = parseTemplate(raw, name);
       setBody(t.body);
       if (t.title && !title) setTitle(t.title);
       if (t.labels.length) setLabels(t.labels);
     });
+  const lacking = form ? missing(form, answers) : [];
   const submit = () => {
-    if (!title.trim() || busy) return;
+    if (!title.trim() || busy || lacking.length) return;
     void run(async () => {
+      const text = form ? formBody(form, answers) : body;
       const created = await gh<Issue>(`${base}/issues`, {
         method: 'POST',
-        body: { title, body, ...(canTriage ? { labels, assignees, milestone: milestone?.number } : {}) },
+        // form labels apply even without triage rights, like on github
+        body: { title, body: text, ...(canTriage ? { labels, assignees, milestone: milestone?.number } : form ? { labels } : {}) },
       });
       clearTitle();
       clearBody();
@@ -1181,20 +1313,39 @@ export function NewIssue() {
             <span className="muted small">Start from a template:</span>
             {templates.files.map((f) => (
               <button key={f.path} className="btn sm" disabled={busy} onClick={() => pick(f)}>
-                {f.name.replace(/\.md$/i, '').replace(/[-_]/g, ' ')}
+                {f.name.replace(/\.(md|ya?ml)$/i, '').replace(/[-_]/g, ' ')}
               </button>
+            ))}
+            {templates.links.map((l) => (
+              <a key={l.url} className="btn sm" href={l.url} data-external title={l.about}>
+                {l.name}
+              </a>
             ))}
           </div>
         )}
         <input className="input" autoFocus placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Title" />
-        <MarkdownEditor value={body} onChange={setBody} context={repo.full_name} onSubmit={submit} placeholder="Describe the issue. Markdown is supported." rows={14} />
+        {form ? (
+          <>
+            <div className="toolbar">
+              <strong>{form.name}</strong>
+              <span className="spacer" />
+              <button className="btn sm" onClick={() => setForm(null)}>
+                Write freely instead
+              </button>
+            </div>
+            <FormFields form={form} answers={answers} setAnswers={setAnswers} />
+          </>
+        ) : (
+          <MarkdownEditor value={body} onChange={setBody} context={repo.full_name} onSubmit={submit} placeholder="Describe the issue. Markdown is supported." rows={14} />
+        )}
         <div className="form-foot">
           <span className="muted small">{title || body ? 'Draft saved' : ''}</span>
           <span className="spacer" />
           <button className="btn" onClick={() => navigate(-1)}>
             Cancel
           </button>
-          <button className="btn primary" disabled={!title.trim() || busy} onClick={submit}>
+          {lacking.length > 0 && <span className="muted small">Fill in {lacking.map((f) => f.attributes.label).join(', ')}</span>}
+          <button className="btn primary" disabled={!title.trim() || busy || lacking.length > 0} onClick={submit}>
             {busy ? 'Creating…' : 'Create issue'}
           </button>
         </div>

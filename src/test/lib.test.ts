@@ -7,7 +7,7 @@ import { splitHighlighted } from '../lib/highlight';
 import { isNewer, newThreads } from '../lib/inbox';
 import { duration, fuzzyScore, parseLineHash, plural, routeFromUrl } from '../lib/util';
 import { remoteRoute, splitPatch } from '../pages/Desktop';
-import { parseTemplate } from '../pages/Issues';
+import { formBody, parseForm, parseTemplate } from '../pages/Issues';
 
 describe('routeFromUrl', () => {
   const r = (u: string) => routeFromUrl(u, 'github.com');
@@ -229,5 +229,46 @@ describe('desktop mode', () => {
     expect(remoteRoute('https://github.com/cli/cli.git', 'github.com')).toBe('/cli/cli');
     expect(remoteRoute('git@github.com:rust-lang/rust.git\n', 'github.com')).toBe('/rust-lang/rust');
     expect(remoteRoute('https://gitlab.com/a/b.git', 'github.com')).toBeNull();
+  });
+});
+
+describe('issue forms', () => {
+  const yml = `name: Bug report
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks!
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Version
+      options: ["1.0", "2.0"]
+  - type: input
+    attributes:
+      label: Logs
+      render: shell
+  - type: checkboxes
+    attributes:
+      label: Terms
+      options:
+        - label: I agree
+          required: true
+`;
+  it('reads the form', () => {
+    const f = parseForm(yml, 'x');
+    expect(f.name).toBe('Bug report');
+    expect(f.labels).toEqual(['bug', 'triage']);
+    expect(f.body).toHaveLength(5);
+  });
+  it('writes the body github would', () => {
+    const f = parseForm(yml, 'x');
+    expect(formBody(f, { 1: 'It broke', 2: '2.0', 4: { 0: true } })).toBe('### What happened?\n\nIt broke\n\n### Version\n\n2.0\n\n### Logs\n\n_No response_\n\n### Terms\n\n- [X] I agree');
   });
 });
