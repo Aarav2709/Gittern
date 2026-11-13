@@ -20,6 +20,7 @@ import { Settings } from './pages/Settings';
 import { FileEditor, NewPull, NewRepo, RepoSettings } from './pages/Manage';
 import { Profile } from './pages/Profile';
 import { OwnerProjectPage } from './pages/Project';
+import { Wiki } from './pages/Wiki';
 import { Blob } from './pages/Blob';
 import { Code, RepoLayout } from './pages/Repo';
 import { activeTabPath } from './lib/store';
@@ -77,6 +78,7 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="projects/:number" element={<ProjectDetail />} />
                 <Route path="deployments" element={<Deployments />} />
                 <Route path="tags" element={<Tags />} />
+                <Route path="wiki" element={<Wiki />} />
                 <Route path="releases/new" element={<ReleaseForm />} />
                 <Route path="releases/edit/:id" element={<ReleaseForm />} />
                 <Route path="releases/tag/*" element={<ReleaseByTag />} />

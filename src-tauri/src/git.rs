@@ -610,3 +610,107 @@ u UU N... 100644 100644 100644 100644 a b c both.rs\0\
         assert_eq!(clone_name("https://github.com/a/.git"), "repository");
     }
 }
+
+#[derive(Serialize)]
+pub struct WikiPage {
+    file: String,
+    title: String,
+}
+
+fn safe_slug(repo: &str) -> Result<&str, String> {
+    let ok = repo.split('/').count() == 2 && repo.split('/').all(|p| !p.is_empty() && !p.starts_with('.')) && repo.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'));
+    if ok { Ok(repo) } else { Err("Not a repository name".into()) }
+}
+
+// a wiki is its own git repository, kept in the app cache
+fn wiki_dir(app: &AppHandle, state: &AppState, repo: &str, sync: bool) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let repo = safe_slug(repo)?;
+    let host = state.host();
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("wikis").join(host.replace(':', "_")).join(repo.replace('/', "__"));
+    let url = format!("https://{host}/{repo}.wiki.git");
+    if !dir.join(".git").exists() {
+        std::fs::create_dir_all(dir.parent().unwrap()).map_err(|e| e.to_string())?;
+        let mut cmd = base(dir.parent().unwrap());
+        auth_env(&mut cmd, state, &url);
+        cmd.args(["clone", "-q", "--", &url]).arg(&dir);
+        finish(cmd, &[0]).map_err(|e| if e.contains("not found") || e.contains("not exist") { "This wiki has no pages yet. Create the first one on GitHub.".to_string() } else { e })?;
+    } else if sync {
+        let mut cmd = base(&dir);
+        auth_env(&mut cmd, state, &url);
+        cmd.args(["pull", "-q", "--rebase"]);
+        // offline: keep showing what we have
+        let _ = finish(cmd, &[0]);
+    }
+    Ok(dir)
+}
+
+fn page_title(file: &str) -> String {
+    Path::new(file).file_stem().map(|s| s.to_string_lossy().replace('-', " ")).unwrap_or_default()
+}
+
+#[tauri::command(async)]
+pub fn wiki_pages(app: AppHandle, state: State<'_, AppState>, repo: String) -> Result<Vec<WikiPage>, String> {
+    let dir = wiki_dir(&app, &state, &repo, true)?;
+    let files = git(&dir, &["ls-files"])?;
+    Ok(files
+        .lines()
+        .filter(|f| !f.is_empty())
+        .map(|f| WikiPage { file: f.to_string(), title: page_title(f) })
+        .collect())
+}
+
+#[tauri::command(async)]
+pub fn wiki_read(app: AppHandle, state: State<'_, AppState>, repo: String, file: String) -> Result<String, String> {
+    let dir = wiki_dir(&app, &state, &repo, false)?;
+    std::fs::read_to_string(dir.join(safe_rel(&file)?)).map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+pub struct WikiEdit {
+    file: String,
+    // none deletes the page
+    content: Option<String>,
+    // the old file when renaming
+    previous: Option<String>,
+    message: String,
+    name: String,
+    email: String,
+}
+
+// writes, renames or deletes a page, then pushes
+#[tauri::command(async)]
+pub fn wiki_write(app: AppHandle, state: State<'_, AppState>, repo: String, edit: WikiEdit) -> Result<(), String> {
+    let WikiEdit { file, content, previous, message, name, email } = edit;
+    let dir = wiki_dir(&app, &state, &repo, true)?;
+    let file = safe_rel(&file)?.to_string();
+    if let Some(prev) = previous.as_deref().filter(|p| *p != file) {
+        git(&dir, &["rm", "-q", "--", safe_rel(prev)?])?;
+    }
+    match &content {
+        Some(text) => {
+            std::fs::write(dir.join(&file), text).map_err(|e| e.to_string())?;
+            git(&dir, &["add", "--", &file])?;
+        }
+        None => {
+            git(&dir, &["rm", "-q", "--", &file])?;
+        }
+    }
+    let mut commit = base(&dir);
+    // fall back to the github identity when git has none
+    if git(&dir, &["config", "user.email"]).map(|e| e.trim().is_empty()).unwrap_or(true) {
+        commit.env("GIT_AUTHOR_NAME", &name).env("GIT_AUTHOR_EMAIL", &email).env("GIT_COMMITTER_NAME", &name).env("GIT_COMMITTER_EMAIL", &email);
+    }
+    commit.args(["commit", "-q", "-m", if message.trim().is_empty() { "Update wiki" } else { message.trim() }]);
+    finish(commit, &[0])?;
+    let url = format!("https://{}/{}.wiki.git", state.host(), safe_slug(&repo)?);
+    let mut push = base(&dir);
+    auth_env(&mut push, &state, &url);
+    push.args(["push", "-q", "origin", "HEAD"]);
+    if let Err(e) = finish(push, &[0]) {
+        // leave the clone matching the remote
+        let _ = git(&dir, &["reset", "-q", "--hard", "@{u}"]);
+        return Err(e);
+    }
+    Ok(())
+}

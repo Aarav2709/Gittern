@@ -651,3 +651,4 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .rule-check { display: flex; align-items: flex-start; gap: 8px; }
 .rule-check input { margin-top: 3px; }
 .rule-sub { display: flex; flex-direction: column; gap: 10px; margin-left: 24px; }
+.wiki-pages { display: flex; flex-direction: column; padding: 6px; align-self: start; }

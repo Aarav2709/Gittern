@@ -265,6 +265,7 @@ export function RepoLayout() {
     ...(repo.has_discussions ? [{ to: `${base}/discussions`, label: 'Discussions', icon: <CommentDiscussionIcon />, on: ['discussions'], count: counts?.discussions?.totalCount }] : []),
     { to: `${base}/actions`, label: 'Actions', icon: <PlayIcon />, on: ['actions'] },
     ...(repo.has_projects ? [{ to: `${base}/projects`, label: 'Projects', icon: <TableIcon />, on: ['projects'] }] : []),
+    ...(repo.has_wiki ? [{ to: `${base}/wiki`, label: 'Wiki', icon: <BookIcon />, on: ['wiki'] }] : []),
     { to: `${base}/commits`, label: 'Commits', icon: <GitCommitIcon />, on: ['commits', 'commit'] },
     { to: `${base}/releases`, label: 'Releases', icon: <TagIcon />, on: ['releases', 'tags'] },
     { to: `${base}/security`, label: 'Security', icon: <ShieldIcon />, on: ['security'] },
