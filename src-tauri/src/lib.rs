@@ -185,6 +185,36 @@ async fn upload_release_asset(app: tauri::AppHandle, state: State<'_, AppState>,
     Ok(Some(body))
 }
 
+#[derive(Serialize)]
+struct PickedFile {
+    name: String,
+    // base64
+    content: String,
+    size: u64,
+}
+
+// files chosen in a native picker, read for upload
+#[tauri::command]
+async fn pick_files(app: tauri::AppHandle) -> Result<Vec<PickedFile>, String> {
+    use base64::Engine;
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().set_title("Choose files to upload").blocking_pick_files()).await.map_err(|e| e.to_string())?;
+    let mut out = vec![];
+    for f in picked.unwrap_or_default() {
+        let path = f.into_path().map_err(|e| e.to_string())?;
+        let bytes = tokio_read(path.clone()).await?;
+        if bytes.len() > 100 * 1024 * 1024 {
+            return Err(format!("{} is over GitHub's 100 MB limit", path.display()));
+        }
+        out.push(PickedFile {
+            name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            size: bytes.len() as u64,
+            content: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        });
+    }
+    Ok(out)
+}
+
 async fn tokio_read(path: PathBuf) -> Result<Vec<u8>, String> {
     tauri::async_runtime::spawn_blocking(move || std::fs::read(&path)).await.map_err(|e| e.to_string())?.map_err(|e| format!("Could not read the file: {e}"))
 }
@@ -532,6 +562,7 @@ pub fn run() {
             media_support,
             seal_secret,
             upload_release_asset,
+            pick_files,
             git::local_repos,
             git::add_local_repo,
             git::remove_local_repo,

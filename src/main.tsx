@@ -21,6 +21,7 @@ import { FileEditor, NewPull, NewRepo, RepoSettings } from './pages/Manage';
 import { Profile } from './pages/Profile';
 import { OwnerProjectPage } from './pages/Project';
 import { Wiki } from './pages/Wiki';
+import { UploadFiles } from './pages/Upload';
 import { Blob } from './pages/Blob';
 import { Code, RepoLayout } from './pages/Repo';
 import { activeTabPath } from './lib/store';
@@ -60,6 +61,7 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="blob/*" element={<Blob />} />
                 <Route path="edit/*" element={<FileEditor />} />
                 <Route path="new/*" element={<FileEditor create />} />
+                <Route path="upload/*" element={<UploadFiles />} />
                 <Route path="compare" element={<NewPull />} />
                 <Route path="compare/*" element={<NewPull />} />
                 <Route path="search" element={<RepoSearch />} />

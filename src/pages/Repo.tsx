@@ -29,6 +29,7 @@ import {
   StarIcon,
   TagIcon,
   TriangleDownIcon,
+  UploadIcon,
 } from '@primer/octicons-react';
 import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -482,6 +483,11 @@ function CloneMenu({ repo, onFind, addTo }: { repo: Repo; onFind: () => void; ad
             {addTo && (
               <Link className="btn" to={addTo}>
                 <PlusIcon /> Add file
+              </Link>
+            )}
+            {addTo && isTauri && (
+              <Link className="btn" to={addTo.replace(/\/new\//, '/upload/')}>
+                <UploadIcon /> Upload
               </Link>
             )}
           </div>
