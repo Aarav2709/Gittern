@@ -648,3 +648,6 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .project-table th, .project-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-soft); text-align: left; white-space: nowrap; }
 .project-table th { color: var(--fg-muted); font-weight: 500; }
 .project-table td .input { min-width: 120px; height: 28px; }
+.rule-check { display: flex; align-items: flex-start; gap: 8px; }
+.rule-check input { margin-top: 3px; }
+.rule-sub { display: flex; flex-direction: column; gap: 10px; margin-left: 24px; }

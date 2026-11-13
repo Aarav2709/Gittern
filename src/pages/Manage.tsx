@@ -11,6 +11,7 @@ import { confirmDialog, promptDialog, toast, toastError, useAction, useDraft } f
 import type { Branch, CommitEntry, DiffFileEntry, PullRequest, Repo, User } from '../lib/types';
 import { encPath, plural } from '../lib/util';
 import { useRepo } from './Repo';
+import { BranchRules } from './Rules';
 
 const FEATURES: [keyof Repo, string, string][] = [
   ['has_issues', 'Issues', 'Track bugs, ideas and tasks.'],
@@ -250,86 +251,6 @@ function Access({ repo }: { repo: Repo }) {
         )}
         remove={(i) => ({ path: `${api}/invitations/${i.id}`, confirm: `Cancel the invitation for ${i.invitee?.login}?` })}
       />
-    </>
-  );
-}
-
-function Branches({ repo }: { repo: Repo }) {
-  const api = `/repos/${repo.full_name}`;
-  const q = useGhAll<Branch>(`${api}/branches?protected=true&per_page=100`);
-  const rules = useGh<{ id: number; name: string; enforcement: string; target: string }[]>(`${api}/rulesets?per_page=100`);
-  const { busy, run } = useAction();
-  const [name, setName] = useState('');
-  const protect = (branch: string) =>
-    run(async () => {
-      await gh(`${api}/branches/${encodeURIComponent(branch)}/protection`, {
-        method: 'PUT',
-        body: { required_status_checks: null, enforce_admins: false, required_pull_request_reviews: { required_approving_review_count: 1 }, restrictions: null },
-      });
-      setName('');
-      await invalidate(`${api}/branches`);
-    }, `${branch} now requires a reviewed pull request`);
-  return (
-    <>
-      <section className="card">
-        <div className="card-head">
-          <strong>Protected branches</strong>
-        </div>
-        <ListState q={q} count={q.items.length} empty="No protected branches" />
-        {q.items.map((b) => (
-          <div key={b.name} className="row compact">
-            <span className="state-icon">
-              <LockIcon />
-            </span>
-            <div className="row-main">
-              <Link to={`/${repo.full_name}/tree/${b.name}`}>{b.name}</Link>
-            </div>
-            <button
-              className="btn sm"
-              disabled={busy}
-              onClick={async () => {
-                if (await confirmDialog({ title: `Remove protection from ${b.name}?`, confirmLabel: 'Remove protection', danger: true }))
-                  void run(async () => (await gh(`${api}/branches/${encodeURIComponent(b.name)}/protection`, { method: 'DELETE' }), await invalidate(`${api}/branches`)), 'Protection removed');
-              }}
-            >
-              Unprotect
-            </button>
-          </div>
-        ))}
-        <form
-          className="form-section form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void protect(name.trim());
-          }}
-        >
-          <Field label="Protect a branch" hint="Requires a pull request with one approving review before merging.">
-            <input className="input" placeholder={repo.default_branch} value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <div className="form-foot">
-            <span className="spacer" />
-            <button className="btn primary" disabled={busy || !name.trim()}>
-              Protect
-            </button>
-          </div>
-        </form>
-      </section>
-      {!!rules.data?.length && (
-        <section className="card">
-          <div className="card-head">
-            <strong>Rulesets</strong>
-          </div>
-          {rules.data.map((r) => (
-            <div key={r.id} className="row compact">
-              <div className="row-main">
-                <div className="row-title">
-                  {r.name} <span className="badge">{r.enforcement}</span> <span className="badge">{r.target}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </section>
-      )}
     </>
   );
 }
@@ -747,7 +668,7 @@ export function RepoSettings() {
         <h2 className="title">{tabs.find((t) => t[0] === tab)?.[1] ?? 'General'}</h2>
         {tab === 'general' && <General repo={repo} />}
         {tab === 'access' && <Access repo={repo} />}
-        {tab === 'branches' && <Branches repo={repo} />}
+        {tab === 'branches' && <BranchRules repo={repo} />}
         {tab === 'automation' && <Automation repo={repo} />}
         {tab === 'danger' && <Danger repo={repo} />}
       </div>

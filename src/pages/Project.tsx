@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { MarkdownEditor } from '../components/Editor';
 import { Avatar, Dropdown, Empty, ErrorBox, Field, ListState, Loading, LoadMore, Modal, Segmented, Time } from '../components/ui';
-import { gh, gql, invalidateGql, useGql, useGqlPages } from '../lib/api';
+import { gh, gql, invalidateGql, useGqlPages } from '../lib/api';
 import { confirmDialog, promptDialog, toastError, useAction } from '../lib/feedback';
 import { usePref } from '../lib/store';
 import type { Issue } from '../lib/types';
