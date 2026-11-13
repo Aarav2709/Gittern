@@ -42,6 +42,7 @@ import { confirmDialog, promptDialog, toast, toastError } from '../lib/feedback'
 import { langColor } from '../lib/langs';
 import type { Repo } from '../lib/types';
 import { FundingButton } from './Sponsors';
+import { ListMenu } from './Lists';
 import { toggleFavorite, usePref, useRepoList, visitRepo } from '../lib/store';
 import { compact, copyText, encPath, openExternal, timeAgo } from '../lib/util';
 
@@ -81,9 +82,12 @@ function StarButton({ repo }: { repo: Repo }) {
     }
   };
   return (
-    <button className={`btn ${starred ? 'on' : ''}`} disabled={busy || q.isLoading} onClick={toggle}>
-      {starred ? <StarFillIcon /> : <StarIcon />} {starred ? 'Starred' : 'Star'} <span className="count">{compact(repo.stargazers_count)}</span>
-    </button>
+    <div className="split-btn">
+      <button className={`btn ${starred ? 'on' : ''}`} disabled={busy || q.isLoading} onClick={toggle}>
+        {starred ? <StarFillIcon /> : <StarIcon />} {starred ? 'Starred' : 'Star'} <span className="count">{compact(repo.stargazers_count)}</span>
+      </button>
+      <ListMenu repoId={repo.node_id} fullName={repo.full_name} />
+    </div>
   );
 }
 

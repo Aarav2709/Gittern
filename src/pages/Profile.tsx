@@ -19,6 +19,7 @@ import { BlockButton, OrgPeople, OrgSettings, OrgTeams, useOrgAdmin } from './Or
 import { Packages } from './Packages';
 import { OwnerProjects } from './Project';
 import { Sponsors } from './Sponsors';
+import { StarLists } from './Lists';
 
 const PROFILE_QUERY = `
 query($login: String!) {
@@ -331,7 +332,13 @@ export function Profile() {
             }
           />
         )}
-        {tab === 'stars' && <RepoList path={`/users/${u.login}/starred?per_page=30`} />}
+        {tab === 'stars' && (
+          <>
+            <StarLists login={u.login} own={u.login === viewer.login}>
+              <RepoList path={`/users/${u.login}/starred?per_page=30`} />
+            </StarLists>
+          </>
+        )}
         {tab === 'gists' && <GistList path={`/users/${u.login}/gists?per_page=30`} />}
         {tab === 'followers' && <UserList path={`/users/${u.login}/followers?per_page=50`} empty="No followers yet" />}
         {tab === 'following' && <UserList path={`/users/${u.login}/following?per_page=50`} empty="Not following anyone" />}
