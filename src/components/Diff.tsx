@@ -173,13 +173,13 @@ export function ThreadView({ thread, api, header }: { thread: Thread; api: Revie
   );
 }
 
-function Composer({ api, path, line, side, onClose }: { api: ReviewApi; path: string; line: number; side: Side; onClose: () => void }) {
+function Composer({ api, path, line, side, onClose, code }: { api: ReviewApi; path: string; line: number; side: Side; onClose: () => void; code?: string }) {
   const [body, setBody] = useState('');
   const { busy, run } = useAction();
   const reviewing = api.pending.length > 0;
   return (
     <div className="thread composer-thread">
-      <MarkdownEditor value={body} onChange={setBody} context={api.context} rows={3} autoFocus placeholder={`Comment on line ${line}`} />
+      <MarkdownEditor value={body} onChange={setBody} context={api.context} rows={3} autoFocus placeholder={`Comment on line ${line}`} suggestion={code} />
       <div className="form-foot">
         <span className="spacer" />
         <button className="btn sm" onClick={onClose}>
@@ -327,7 +327,7 @@ export function DiffFile({
           </div>
         ))}
         {compose && (
-          <Composer api={review} path={file.filename} line={l.t === 'del' ? l.o! : l.n!} side={l.t === 'del' ? 'LEFT' : 'RIGHT'} onClose={() => setComposing(null)} />
+          <Composer api={review} path={file.filename} line={l.t === 'del' ? l.o! : l.n!} side={l.t === 'del' ? 'LEFT' : 'RIGHT'} onClose={() => setComposing(null)} code={l.t === 'del' ? undefined : l.text} />
         )}
       </div>
     );

@@ -1,4 +1,4 @@
-import { BoldIcon, CodeIcon, HeadingIcon, ItalicIcon, LinkIcon, ListOrderedIcon, ListUnorderedIcon, QuoteIcon, TasklistIcon } from '@primer/octicons-react';
+import { BoldIcon, CodeIcon, FileDiffIcon, HeadingIcon, ItalicIcon, LinkIcon, ListOrderedIcon, ListUnorderedIcon, QuoteIcon, TasklistIcon } from '@primer/octicons-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { gh } from '../lib/api';
 import { Loading, Markdown, Segmented } from './ui';
@@ -45,6 +45,7 @@ export function MarkdownEditor({
   placeholder = 'Leave a comment. Markdown is supported.',
   rows = 5,
   autoFocus,
+  suggestion,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -53,6 +54,8 @@ export function MarkdownEditor({
   placeholder?: string;
   rows?: number;
   autoFocus?: boolean;
+  // the line's code, offered as a suggested change
+  suggestion?: string;
 }) {
   const [mode, setMode] = useState<'write' | 'preview'>('write');
   const [preview, setPreview] = useState<string | null>(null);
@@ -98,6 +101,11 @@ export function MarkdownEditor({
               {t.icon}
             </button>
           ))}
+        {mode === 'write' && suggestion !== undefined && (
+          <button type="button" className="icon-btn sm" title="Suggest a change" aria-label="Suggest a change" tabIndex={-1} onClick={() => onChange(`${value}${value && !value.endsWith('\n') ? '\n' : ''}\`\`\`suggestion\n${suggestion}\n\`\`\`\n`)}>
+            <FileDiffIcon size={14} />
+          </button>
+        )}
       </div>
       {mode === 'write' ? (
         <textarea
