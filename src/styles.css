@@ -652,3 +652,7 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .rule-check input { margin-top: 3px; }
 .rule-sub { display: flex; flex-direction: column; gap: 10px; margin-left: 24px; }
 .wiki-pages { display: flex; flex-direction: column; padding: 6px; align-self: start; }
+.avatar-wall { display: flex; flex-wrap: wrap; gap: 6px; }
+.tier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.tier { display: flex; flex-direction: column; gap: 8px; color: inherit; }
+.tier:hover { text-decoration: none; background: var(--hover); }

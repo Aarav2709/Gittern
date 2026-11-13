@@ -18,6 +18,7 @@ import { GistList } from './Gists';
 import { BlockButton, OrgPeople, OrgSettings, OrgTeams, useOrgAdmin } from './Org';
 import { Packages } from './Packages';
 import { OwnerProjects } from './Project';
+import { Sponsors } from './Sponsors';
 
 const PROFILE_QUERY = `
 query($login: String!) {
@@ -243,6 +244,7 @@ export function Profile() {
         ]),
     { id: 'projects', label: 'Projects' },
     { id: 'packages', label: 'Packages' },
+    { id: 'sponsors', label: 'Sponsors' },
     ...(!isUser && orgAdmin ? [{ id: 'settings', label: 'Settings' }] : []),
   ];
   const blog = u.blog && (/^https?:\/\//.test(u.blog) ? u.blog : `https://${u.blog}`);
@@ -338,6 +340,7 @@ export function Profile() {
         {tab === 'projects' && <OwnerProjects owner={u.login} canCreate={u.login === viewer.login || orgAdmin} />}
         {tab === 'packages' && <Packages owner={u.login} isOrg={!isUser} canManage={u.login === viewer.login || orgAdmin} />}
         {tab === 'settings' && orgAdmin && <OrgSettings org={u.login} />}
+        {tab === 'sponsors' && <Sponsors login={u.login} />}
       </section>
     </div></div>
   );

@@ -39,6 +39,7 @@ import { ACCEPT, gh, gql, invalidate, isTauri, useGh, useGhAll, useGql } from '.
 import { confirmDialog, promptDialog, toast, toastError } from '../lib/feedback';
 import { langColor } from '../lib/langs';
 import type { Repo } from '../lib/types';
+import { FundingButton } from './Sponsors';
 import { toggleFavorite, usePref, useRepoList, visitRepo } from '../lib/store';
 import { compact, copyText, encPath, timeAgo } from '../lib/util';
 
@@ -294,6 +295,7 @@ export function RepoLayout() {
           >
             <PinIcon /> {pinned ? 'Pinned' : 'Pin'}
           </button>
+          <FundingButton owner={repo.owner.login} name={repo.name} />
           {repo.is_template && <UseTemplate repo={repo} />}
           <WatchButton repo={repo} />
           <ForkButton repo={repo} />
