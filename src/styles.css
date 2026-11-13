@@ -656,3 +656,5 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .tier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .tier { display: flex; flex-direction: column; gap: 8px; color: inherit; }
 .tier:hover { text-decoration: none; background: var(--hover); }
+.menu .menu-rich { align-items: flex-start; padding-block: 6px; }
+.small.block, .muted.block { display: block; }

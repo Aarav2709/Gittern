@@ -158,21 +158,40 @@ function ForkButton({ repo }: { repo: Repo }) {
 function WatchButton({ repo }: { repo: Repo }) {
   const path = `/repos/${repo.full_name}/subscription`;
   const q = useGh<any>(path);
-  const watching = q.isSuccess && !!q.data?.subscribed;
+  const level = !q.isSuccess ? 'participating' : q.data?.ignored ? 'ignore' : q.data?.subscribed ? 'all' : 'participating';
   const [busy, setBusy] = useState(false);
-  const toggle = async () => {
+  const set = async (to: string) => {
     setBusy(true);
     try {
-      await gh(path, watching ? { method: 'DELETE' } : { method: 'PUT', body: { subscribed: true } });
+      await gh(path, to === 'participating' ? { method: 'DELETE' } : { method: 'PUT', body: to === 'ignore' ? { ignored: true } : { subscribed: true } });
       await invalidate(path);
+    } catch (e) {
+      toastError(e);
     } finally {
       setBusy(false);
     }
   };
+  const levels: [string, string, string][] = [
+    ['participating', 'Participating and @mentions', 'Only when you take part or are mentioned.'],
+    ['all', 'All activity', 'Every issue, pull request, release and discussion.'],
+    ['ignore', 'Ignore', 'Never, not even when mentioned.'],
+  ];
   return (
-    <button className={`btn ${watching ? 'on' : ''}`} disabled={busy || q.isLoading} onClick={toggle} title={watching ? 'Stop watching' : 'Watch: get notified of all activity'}>
-      <EyeIcon /> {watching ? 'Watching' : 'Watch'}
-    </button>
+    <Dropdown align="right" className={`btn ${level === 'all' ? 'on' : ''}`} disabled={busy || q.isLoading} trigger={<><EyeIcon /> {level === 'all' ? 'Watching' : level === 'ignore' ? 'Ignoring' : 'Watch'} <TriangleDownIcon /></>}>
+      {(close) => (
+        <div className="menu wide" onClick={close}>
+          {levels.map(([id, label, note]) => (
+            <button key={id} className="menu-rich" onClick={() => id !== level && set(id)}>
+              <span className="check">{id === level && <CheckIcon size={14} />}</span>
+              <span>
+                {label}
+                <span className="muted small block">{note}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </Dropdown>
   );
 }
 

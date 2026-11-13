@@ -213,6 +213,14 @@ export function Managed<T>({
   );
 }
 
+const ROLES = [
+  { value: 'push', label: 'Write' },
+  { value: 'pull', label: 'Read' },
+  { value: 'triage', label: 'Triage' },
+  { value: 'maintain', label: 'Maintain' },
+  { value: 'admin', label: 'Admin' },
+];
+
 function Access({ repo }: { repo: Repo }) {
   const api = `/repos/${repo.full_name}`;
   return (
@@ -228,11 +236,25 @@ function Access({ repo }: { repo: Repo }) {
             <Avatar user={u} size={18} /> <Link to={`/${u.login}`}>{u.login}</Link> <span className="badge">{u.role_name ?? 'collaborator'}</span>
           </div>
         )}
+        actions={(u, refresh) => (
+          <button
+            className="btn sm"
+            onClick={async () => {
+              const permission = await promptDialog({ title: `Role for ${u.login}`, label: 'Role', options: ROLES, confirmLabel: 'Change role' });
+              if (permission) await gh(`${api}/collaborators/${u.login}`, { method: 'PUT', body: { permission } }).then(refresh, toastError);
+            }}
+          >
+            Role
+          </button>
+        )}
         remove={(u) => ({ path: `${api}/collaborators/${u.login}`, confirm: `Remove ${u.login} from ${repo.name}?` })}
         add={{
           label: 'Invite',
-          fields: [{ key: 'login', label: 'Invite by username', placeholder: 'octocat' }],
-          submit: (v) => gh(`${api}/collaborators/${encodeURIComponent(v.login.trim())}`, { method: 'PUT', body: { permission: 'push' } }),
+          fields: [
+            { key: 'login', label: 'Invite by username', placeholder: 'octocat' },
+            { key: 'permission', label: 'Role', options: ROLES },
+          ],
+          submit: (v) => gh(`${api}/collaborators/${encodeURIComponent(v.login.trim())}`, { method: 'PUT', body: { permission: v.permission } }),
         }}
       />
       <Managed<{ id: number; invitee: User; permissions: string; created_at: string }>
