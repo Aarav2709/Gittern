@@ -5,7 +5,6 @@ import {
   CommentIcon,
   CrossReferenceIcon,
   EyeIcon,
-  GearIcon,
   GitBranchIcon,
   GitCommitIcon,
   GitMergeIcon,
@@ -27,7 +26,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { type PendingComment, ThreadView } from '../components/Diff';
 import { MarkdownEditor, quoteReply } from '../components/Editor';
 import { Avatar, Dropdown, Label, ListState, Loading, LoadMore, Markdown, ErrorBox, Segmented, StateIcon, StatePill, Time, UserLink } from '../components/ui';
-import { ACCEPT, gh, ghRaw, gql, invalidate, invalidateGql, useGh, useGhAll, useGhPages, useGql } from '../lib/api';
+import { ACCEPT, gh, ghRaw, gql, invalidate, invalidateGql, useGh, useGhPages, useGql } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { confirmDialog, promptDialog, toast, useAction, useDraft } from '../lib/feedback';
 import { usePref } from '../lib/store';

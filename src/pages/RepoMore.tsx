@@ -1,9 +1,9 @@
-import { AlertIcon, MilestoneIcon, PencilIcon, RepoForkedIcon, RocketIcon, ShieldCheckIcon, TableIcon, TagIcon, TrashIcon } from '@primer/octicons-react';
+import { AlertIcon, MilestoneIcon, PencilIcon, RepoForkedIcon, RocketIcon, ShieldCheckIcon, TagIcon, TrashIcon } from '@primer/octicons-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Avatar, Bars, Empty, ErrorBox, Field, ListState, Loading, LoadMore, RepoRow, Segmented, SubTabs, Switch, Time, UserLink, useSubTab } from '../components/ui';
-import { gh, type GhError, ghRaw, invalidate, useGh, useGhPages, useGqlPages, webUrl } from '../lib/api';
+import { gh, type GhError, ghRaw, invalidate, useGh, useGhPages, webUrl } from '../lib/api';
 import { confirmDialog, promptDialog, useAction } from '../lib/feedback';
 import type { Issue, Label, Milestone, Repo, User } from '../lib/types';
 import { compact, plural } from '../lib/util';
