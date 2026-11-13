@@ -18,6 +18,8 @@ const FEATURES: [keyof Repo, string, string][] = [
   ['has_discussions', 'Discussions', 'A place for questions and open-ended conversation.'],
   ['has_projects', 'Projects', 'Plan and track work on boards.'],
   ['has_wiki', 'Wiki', 'Host documentation alongside the code.'],
+  ['is_template', 'Template repository', 'Let people start new repositories from this one.'],
+  ['web_commit_signoff_required', 'Require sign-off on web commits', 'Commits made on GitHub carry a Signed-off-by line.'],
 ];
 const MERGING: [keyof Repo, string, string][] = [
   ['allow_merge_commit', 'Merge commits', 'Keep every commit from the branch, joined by a merge commit.'],
@@ -25,6 +27,7 @@ const MERGING: [keyof Repo, string, string][] = [
   ['allow_rebase_merge', 'Rebase merging', 'Replay the commits on top of the base branch.'],
   ['allow_auto_merge', 'Auto-merge', 'Merge automatically once reviews and checks pass.'],
   ['delete_branch_on_merge', 'Delete head branches', 'Remove the branch after its pull request merges.'],
+  ['allow_update_branch', 'Suggest updating branches', 'Offer to update a pull request that falls behind its base.'],
 ];
 const SETTING_KEYS: (keyof Repo)[] = ['name', 'description', 'homepage', 'default_branch', ...FEATURES.map((f) => f[0]), ...MERGING.map((m) => m[0])];
 
@@ -106,6 +109,7 @@ function General({ repo }: { repo: Repo }) {
           {busy ? 'Saving…' : 'Save changes'}
         </button>
       </div>
+      <Moderation repo={repo} />
     </>
   );
 }
@@ -220,6 +224,187 @@ const ROLES = [
   { value: 'maintain', label: 'Maintain' },
   { value: 'admin', label: 'Admin' },
 ];
+
+const LIMITS = [
+  { value: 'existing_users', label: 'Only users who have been on GitHub for a while' },
+  { value: 'contributors_only', label: 'Only prior contributors' },
+  { value: 'collaborators_only', label: 'Only collaborators' },
+];
+const EXPIRY = [
+  { value: 'one_day', label: '24 hours' },
+  { value: 'three_days', label: '3 days' },
+  { value: 'one_week', label: '1 week' },
+  { value: 'one_month', label: '1 month' },
+  { value: 'six_months', label: '6 months' },
+];
+
+// temporary interaction limits
+function Moderation({ repo }: { repo: Repo }) {
+  const api = `/repos/${repo.full_name}/interaction-limits`;
+  const q = useGh<{ limit?: string; expires_at?: string } | null>(api);
+  const { busy, run } = useAction();
+  const limit = q.data?.limit;
+  return (
+    <section className="card">
+      <div className="card-head">
+        <strong>Interaction limits</strong>
+      </div>
+      <div className="row compact">
+        <div className="row-main">
+          <strong>{limit ? LIMITS.find((l) => l.value === limit)?.label : 'Anyone can comment, open issues and pull requests'}</strong>
+          {q.data?.expires_at && (
+            <span className="muted">
+              until <Time iso={q.data.expires_at} />
+            </span>
+          )}
+        </div>
+        {limit ? (
+          <button className="btn sm" disabled={busy} onClick={() => run(async () => (await gh(api, { method: 'DELETE' }), await invalidate(api)), 'Limit removed')}>
+            Remove limit
+          </button>
+        ) : (
+          <button
+            className="btn sm"
+            disabled={busy}
+            onClick={async () => {
+              const l = await promptDialog({ title: 'Limit interactions', label: 'Who can interact', options: LIMITS, confirmLabel: 'Next' });
+              if (!l) return;
+              const expiry = await promptDialog({ title: 'Limit interactions', label: 'For how long', options: EXPIRY, confirmLabel: 'Limit' });
+              if (expiry) await run(async () => (await gh(api, { method: 'PUT', body: { limit: l, expiry } }), await invalidate(api)), 'Interactions limited');
+            }}
+          >
+            Limit interactions
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// who may run actions and what the token can do
+function ActionsPermissions({ repo }: { repo: Repo }) {
+  const api = `/repos/${repo.full_name}/actions/permissions`;
+  const perms = useGh<{ enabled: boolean; allowed_actions?: string }>(api);
+  const wf = useGh<{ default_workflow_permissions: string; can_approve_pull_request_reviews: boolean }>(`${api}/workflow`);
+  const { busy, run } = useAction();
+  const put = (path: string, body: object) => run(async () => (await gh(path, { method: 'PUT', body }), await invalidate(api)), 'Saved');
+  if (!perms.data) return null;
+  return (
+    <section className="card">
+      <div className="card-head">
+        <strong>Actions permissions</strong>
+      </div>
+      <div className="row compact">
+        <div className="row-main">Allowed actions</div>
+        <select
+          className="input select"
+          disabled={busy}
+          value={perms.data.enabled ? (perms.data.allowed_actions ?? 'all') : 'off'}
+          onChange={(e) => put(api, e.target.value === 'off' ? { enabled: false } : { enabled: true, allowed_actions: e.target.value })}
+        >
+          <option value="all">All actions</option>
+          <option value="local_only">Only this repository's</option>
+          <option value="selected">Selected (set on GitHub)</option>
+          <option value="off">Disabled</option>
+        </select>
+      </div>
+      {wf.data && (
+        <>
+          <div className="row compact">
+            <div className="row-main">Workflow token permissions</div>
+            <select className="input select" disabled={busy} value={wf.data.default_workflow_permissions} onChange={(e) => put(`${api}/workflow`, { ...wf.data, default_workflow_permissions: e.target.value })}>
+              <option value="read">Read repository contents</option>
+              <option value="write">Read and write</option>
+            </select>
+          </div>
+          <div className="row compact">
+            <div className="row-main">Let Actions create and approve pull requests</div>
+            <Switch checked={wf.data.can_approve_pull_request_reviews} disabled={busy} label="Let Actions approve pull requests" onChange={(v) => put(`${api}/workflow`, { ...wf.data, can_approve_pull_request_reviews: v })} />
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+// wait timer, reviewers and branch policy for one environment
+function EnvironmentEdit({ repo, name, onClose }: { repo: Repo; name: string; onClose: () => void }) {
+  const api = `/repos/${repo.full_name}/environments/${encodeURIComponent(name)}`;
+  const env = useGh<any>(api);
+  const [wait, setWait] = useState<number | null>(null);
+  const [reviewers, setReviewers] = useState<string | null>(null);
+  const [selfReview, setSelfReview] = useState<boolean | null>(null);
+  const [protectedOnly, setProtectedOnly] = useState<boolean | null>(null);
+  const { busy, run } = useAction();
+  if (!env.data) return <Loading />;
+  const rules: any[] = env.data.protection_rules ?? [];
+  const current = {
+    wait: rules.find((r) => r.type === 'wait_timer')?.wait_timer ?? 0,
+    reviewers: (rules.find((r) => r.type === 'required_reviewers')?.reviewers ?? []).map((r: any) => r.reviewer?.login ?? r.reviewer?.slug).join(', '),
+    self: !!rules.find((r) => r.type === 'required_reviewers')?.prevent_self_review,
+    prot: !!env.data.deployment_branch_policy?.protected_branches,
+  };
+  return (
+    <Modal title={`Environment ${name}`} onClose={onClose}>
+      <form
+        className="dialog-body"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void run(async () => {
+            const names: string[] = String(reviewers ?? current.reviewers).split(',').map((x: string) => x.trim()).filter(Boolean);
+            const users = await Promise.all(names.map((n) => gh<User>(`/users/${encodeURIComponent(n)}`)));
+            const prot = protectedOnly ?? current.prot;
+            await gh(api, {
+              method: 'PUT',
+              body: {
+                wait_timer: wait ?? current.wait,
+                prevent_self_review: selfReview ?? current.self,
+                reviewers: users.map((u) => ({ type: 'User', id: u.id })),
+                deployment_branch_policy: prot ? { protected_branches: true, custom_branch_policies: false } : null,
+              },
+            });
+            await invalidate(`/repos/${repo.full_name}/environments`);
+            onClose();
+          }, 'Environment saved');
+        }}
+      >
+        <Field label="Wait timer (minutes)">
+          <input className="input" type="number" min={0} max={43200} value={wait ?? current.wait} onChange={(e) => setWait(Number(e.target.value))} />
+        </Field>
+        <Field label="Required reviewers" hint="Usernames, comma separated. Up to six.">
+          <input className="input" value={reviewers ?? current.reviewers} onChange={(e) => setReviewers(e.target.value)} />
+        </Field>
+        <label className="check-row">
+          <input type="checkbox" checked={selfReview ?? current.self} onChange={(e) => setSelfReview(e.target.checked)} /> Stop people approving their own deployments
+        </label>
+        <label className="check-row">
+          <input type="checkbox" checked={protectedOnly ?? current.prot} onChange={(e) => setProtectedOnly(e.target.checked)} /> Deploy only from protected branches
+        </label>
+        <div className="form-foot">
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={busy}>
+            Save
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function EnvEditButton({ repo, name }: { repo: Repo; name: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="btn sm" onClick={() => setOpen(true)}>
+        Edit
+      </button>
+      {open && <EnvironmentEdit repo={repo} name={name} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
 
 function Access({ repo }: { repo: Repo }) {
   const api = `/repos/${repo.full_name}`;
@@ -362,6 +547,7 @@ function Automation({ repo }: { repo: Repo }) {
           submit: (v) => gh(`${api}/actions/variables`, { method: 'POST', body: { name: v.name.trim(), value: v.value } }),
         }}
       />
+      <ActionsPermissions repo={repo} />
       <Secrets api={`${api}/actions`} title="Actions secrets" />
       <Secrets api={`${api}/dependabot`} title="Dependabot secrets" />
       <Managed<{ id: number; name: string; protection_rules?: { type: string }[]; updated_at: string }>
@@ -377,6 +563,7 @@ function Automation({ repo }: { repo: Repo }) {
             {!!e.protection_rules?.length && <span className="badge">{plural(e.protection_rules.length, 'rule')}</span>}
           </div>
         )}
+        actions={(e) => <EnvEditButton repo={repo} name={e.name} />}
         remove={(e) => ({ path: `${api}/environments/${encodeURIComponent(e.name)}`, confirm: `Delete the ${e.name} environment?` })}
         add={{
           label: 'Add environment',

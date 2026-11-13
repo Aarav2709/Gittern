@@ -644,8 +644,28 @@ function SecuritySettings({ repo }: { repo: Repo }) {
     ['Dependabot security updates', fixes.data?.enabled, 'automated-security-fixes', () => invalidate(`${api}/automated-security-fixes`)],
     ['Private vulnerability reporting', pvr.data?.enabled, 'private-vulnerability-reporting', () => invalidate(`${api}/private-vulnerability-reporting`)],
   ];
+  const sa = repo.security_and_analysis ?? {};
+  const scanning = useGh<{ state: string }>(`${api}/code-scanning/default-setup`);
+  const patchRepo = (key: string, on: boolean) => run(async () => (await gh(api, { method: 'PATCH', body: { security_and_analysis: { [key]: { status: on ? 'enabled' : 'disabled' } } } }), await invalidate(api)));
+  const extra: [string, boolean | undefined, () => unknown][] = [
+    ['Secret scanning', sa.secret_scanning ? sa.secret_scanning.status === 'enabled' : undefined, () => patchRepo('secret_scanning', sa.secret_scanning?.status !== 'enabled')],
+    ['Push protection', sa.secret_scanning_push_protection ? sa.secret_scanning_push_protection.status === 'enabled' : undefined, () => patchRepo('secret_scanning_push_protection', sa.secret_scanning_push_protection?.status !== 'enabled')],
+    [
+      'Code scanning default setup',
+      scanning.data ? scanning.data.state === 'configured' : undefined,
+      () => run(async () => (await gh(`${api}/code-scanning/default-setup`, { method: 'PATCH', body: { state: scanning.data?.state === 'configured' ? 'not-configured' : 'configured' } }), await invalidate(`${api}/code-scanning`)), 'Code scanning updated'),
+    ],
+  ];
   return (
     <div className="card">
+      {extra
+        .filter(([, on]) => on !== undefined)
+        .map(([label, on, flipIt]) => (
+          <div key={label} className="row compact">
+            <div className="row-main">{label}</div>
+            <Switch checked={!!on} disabled={busy} label={label} onChange={() => flipIt()} />
+          </div>
+        ))}
       {rows.map(([label, on, path, done]) => (
         <div key={path} className="row compact">
           <div className="row-main">{label}</div>

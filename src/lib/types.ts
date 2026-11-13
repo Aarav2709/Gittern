@@ -74,6 +74,9 @@ export interface Repo {
   allow_rebase_merge?: boolean;
   allow_auto_merge?: boolean;
   delete_branch_on_merge?: boolean;
+  allow_update_branch?: boolean;
+  web_commit_signoff_required?: boolean;
+  security_and_analysis?: Record<string, { status: string }>;
   visibility?: string;
 }
 
