@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -128,6 +129,102 @@ const STATUS_ICON: Record<FileChange['status'], ReactNode> = {
   conflict: <AlertIcon className="s-closed" />,
 };
 
+interface CloneProgress {
+  phase: string;
+  percent: number | null;
+  done: number | null;
+  total: number | null;
+  received: string | null;
+  speed: string | null;
+}
+export interface CloneState {
+  title: string;
+  started: number;
+  current: CloneProgress | null;
+  // phases git has moved past, in order
+  finished: string[];
+  // kept after receiving ends, so the size stays on screen
+  received: string | null;
+  speed: string | null;
+}
+
+// the first event names the folder, the rest are git's own progress lines
+export function nextCloneState(s: CloneState | null, p: CloneProgress, now: number): CloneState {
+  if (!s || p.phase.startsWith('Cloning into')) return { title: p.phase, started: now, current: null, finished: [], received: null, speed: null };
+  const moved = s.current && s.current.phase !== p.phase && !s.finished.includes(s.current.phase);
+  return {
+    ...s,
+    current: p,
+    finished: moved ? [...s.finished, s.current!.phase] : s.finished,
+    received: p.received ?? s.received,
+    speed: p.received ? p.speed ?? s.speed : s.speed,
+  };
+}
+
+function clock(ms: number) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function CloneProgressView({ state, cancelling, onCancel }: { state: CloneState; cancelling: boolean; onCancel: () => void }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
+  const p = state.current;
+  const receiving = p?.phase === 'Receiving objects';
+  const counts = p?.done != null ? (p.total != null ? `${p.done.toLocaleString()} / ${p.total.toLocaleString()}` : p.done.toLocaleString()) : null;
+  return (
+    <div className="dialog-body clone-progress">
+      <div className="clone-progress-head">
+        <RepoCloneIcon />
+        <span className="strong">{state.title}</span>
+        <span className="spacer" />
+        <span className="muted small mono-num">{clock(now - state.started)}</span>
+      </div>
+      <div className="progress-wrap">
+        <div className="clone-progress-line">
+          <span>{p?.phase ?? 'Connecting…'}</span>
+          {p?.percent != null && <span className="mono-num">{p.percent}%</span>}
+        </div>
+        <div className={`progress ${p?.percent == null ? 'indeterminate' : ''}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={p?.percent ?? undefined} aria-label={p?.phase ?? 'Cloning'}>
+          <span style={p?.percent != null ? { width: `${p.percent}%` } : undefined} />
+        </div>
+      </div>
+      <dl className="clone-stats">
+        <div>
+          <dt>Objects</dt>
+          <dd className="mono-num">{counts ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>Downloaded</dt>
+          <dd className="mono-num">{state.received ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>Speed</dt>
+          <dd className="mono-num">{receiving && state.speed ? state.speed : '—'}</dd>
+        </div>
+      </dl>
+      {state.finished.length > 0 && (
+        <ul className="clone-steps">
+          {state.finished.map((f) => (
+            <li key={f}>
+              <CheckIcon size={14} className="s-open" /> {f}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="form-foot">
+        <span className="spacer" />
+        <button className="btn" onClick={onCancel} disabled={cancelling}>
+          {cancelling ? 'Cancelling…' : 'Cancel'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CloneDialog({ onClose, onDone, initial }: { onClose: () => void; onDone: (r: LocalRepo) => void; initial?: string }) {
   const mine = useGh<Repo[]>('/user/repos?sort=pushed&per_page=100&affiliation=owner,collaborator,organization_member');
   const [filter, setFilter] = useState(initial ?? '');
@@ -135,21 +232,45 @@ function CloneDialog({ onClose, onDone, initial }: { onClose: () => void; onDone
   const typed = filter.trim();
   const isUrl = /^(https:\/\/|git@|ssh:\/\/)/.test(typed);
   const shorthand = /^[\w.-]+\/[\w.-]+$/.test(typed) ? `https://${ghHost()}/${typed}.git` : null;
+  const [progress, setProgress] = useState<CloneState | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let gone = false;
+    void listen<CloneProgress>('clone-progress', (e) => setProgress((s) => nextCloneState(s, e.payload, Date.now()))).then((un) => (gone ? un() : (stop = un)));
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, []);
   const clone = (url: string) =>
     run(async () => {
+      setProgress(null);
+      setCancelling(false);
       const repo = await invoke<LocalRepo | null>('clone_repo', { url });
       if (repo) {
         toast(`Cloned ${repo.name}`);
         onDone(repo);
       }
     });
+  const cancel = () => {
+    setCancelling(true);
+    void invoke('cancel_clone');
+  };
   const shown = (mine.data ?? []).filter((r) => r.full_name.toLowerCase().includes(typed.toLowerCase()));
+  if (busy && progress) {
+    return (
+      <Modal title="Cloning" onClose={() => {}} wide>
+        <CloneProgressView state={progress} cancelling={cancelling} onCancel={cancel} />
+      </Modal>
+    );
+  }
   return (
-    <Modal title="Clone a repository" onClose={onClose} wide>
+    <Modal title="Clone a repository" onClose={busy ? () => {} : onClose} wide>
       <div className="dialog-body">
         <input className="input" autoFocus placeholder="Filter your repositories, or type owner/repo or a URL" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Repository" />
         {busy ? (
-          <Loading label="Cloning… pick a folder if asked" />
+          <Loading label="Choose a folder to clone into…" />
         ) : (
           <div className="menu-scroll clone-list">
             {(isUrl || shorthand) && (

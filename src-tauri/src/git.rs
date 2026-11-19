@@ -1,11 +1,15 @@
 // local git workspace: every command runs the user's git in a folder they picked
 
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{quiet, AppState};
@@ -238,9 +242,126 @@ pub fn clone_repo(app: AppHandle, state: State<'_, AppState>, url: String) -> Re
     }
     let mut cmd = base(&parent);
     auth_env(&mut cmd, &state, &url);
-    cmd.arg("clone").arg("--").arg(&url).arg(&dest);
-    finish(cmd, &[0])?;
+    cmd.args(["clone", "--progress", "--"]).arg(&url).arg(&dest);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    let stderr = {
+        let mut slot = CLONING.lock().unwrap();
+        if slot.is_some() {
+            return Err("Another clone is still running".into());
+        }
+        let mut child = cmd.spawn().map_err(|e| format!("Could not run git: {e}"))?;
+        let stderr = child.stderr.take();
+        *slot = Some(child);
+        CANCELLED.store(false, Ordering::SeqCst);
+        stderr
+    };
+    let _ = app.emit("clone-progress", CloneProgress { phase: format!("Cloning into {}", name_of(&dest)), ..Default::default() });
+    let last = stderr.map(|e| follow(&app, e)).unwrap_or_default();
+    let ok = CLONING.lock().unwrap().take().is_some_and(|mut c| c.wait().is_ok_and(|s| s.success()));
+    if !ok {
+        // the folder wasn't there before, so whatever is left is a half-finished clone
+        let _ = std::fs::remove_dir_all(&dest);
+        if CANCELLED.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        let msg = last.trim_start_matches("fatal: ").trim_start_matches("error: ");
+        return Err(if msg.is_empty() { "git clone failed".into() } else { msg.to_string() });
+    }
     Ok(Some(remember(&state, &dest)))
+}
+
+#[tauri::command(async)]
+pub fn cancel_clone() {
+    if let Some(child) = CLONING.lock().unwrap().as_mut() {
+        CANCELLED.store(true, Ordering::SeqCst);
+        // git clone runs helpers of its own, so take the whole tree down on windows
+        #[cfg(windows)]
+        let _ = quiet("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).status();
+        let _ = child.kill();
+    }
+}
+
+// one step of git's progress output, as the clone dialog shows it
+#[derive(Serialize, Clone, Default, Debug)]
+pub struct CloneProgress {
+    phase: String,
+    percent: Option<u32>,
+    done: Option<u64>,
+    total: Option<u64>,
+    // how much has come down so far and how fast, while receiving objects
+    received: Option<String>,
+    speed: Option<String>,
+}
+
+// the clone in progress, so it can be cancelled
+static CLONING: Mutex<Option<Child>> = Mutex::new(None);
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+// git prints lines like "Receiving objects:  45% (450/1000), 1.20 MiB | 2.00 MiB/s"
+pub fn parse_progress(line: &str) -> Option<CloneProgress> {
+    let line = line.trim();
+    let line = line.strip_prefix("remote:").unwrap_or(line).trim();
+    let (phase, rest) = line.split_once(':')?;
+    if !phase.contains(' ') || !phase.chars().all(|c| c.is_ascii_alphabetic() || c == ' ') {
+        return None;
+    }
+    let rest = rest.trim().trim_end_matches('.').trim_end_matches(", done").trim();
+    let mut p = CloneProgress { phase: phase.to_string(), ..Default::default() };
+    let Some((pct, after)) = rest.split_once('%') else {
+        // "Enumerating objects: 1234" has a count and nothing else
+        p.done = Some(rest.split(',').next()?.trim().parse().ok()?);
+        return Some(p);
+    };
+    p.percent = Some(pct.trim().parse().ok()?);
+    if let Some((counts, tail)) = after.trim().strip_prefix('(').and_then(|a| a.split_once(')')) {
+        if let Some((done, total)) = counts.split_once('/') {
+            p.done = done.trim().parse().ok();
+            p.total = total.trim().parse().ok();
+        }
+        let tail = tail.trim_start_matches(',').trim();
+        let (got, speed) = tail.split_once('|').unwrap_or((tail, ""));
+        p.received = Some(got.trim().to_string()).filter(|s| !s.is_empty());
+        p.speed = Some(speed.trim().to_string()).filter(|s| !s.is_empty());
+    }
+    Some(p)
+}
+
+// reads git's stderr as it arrives, sending progress and keeping the last other line for errors
+fn follow(app: &AppHandle, mut stderr: impl Read) -> String {
+    let mut buf = [0u8; 4096];
+    let mut line = Vec::new();
+    let mut last = String::new();
+    let mut phase = String::new();
+    let mut sent = Instant::now() - Duration::from_secs(1);
+    let mut flush = |line: &mut Vec<u8>, last: &mut String| {
+        let text = String::from_utf8_lossy(line).trim().to_string();
+        line.clear();
+        if text.is_empty() {
+            return;
+        }
+        let Some(p) = parse_progress(&text) else {
+            *last = text;
+            return;
+        };
+        // a new or finished phase always goes out, the rest at most every 80ms
+        if p.phase != phase || p.percent == Some(100) || sent.elapsed() >= Duration::from_millis(80) {
+            phase.clone_from(&p.phase);
+            sent = Instant::now();
+            let _ = app.emit("clone-progress", p);
+        }
+    };
+    // progress lines end in \r while they update and \n when a phase is done
+    while let Ok(n @ 1..) = stderr.read(&mut buf) {
+        for &b in &buf[..n] {
+            if b == b'\r' || b == b'\n' {
+                flush(&mut line, &mut last);
+            } else {
+                line.push(b);
+            }
+        }
+    }
+    flush(&mut line, &mut last);
+    last
 }
 
 #[tauri::command(async)]
@@ -608,6 +729,24 @@ u UU N... 100644 100644 100644 100644 a b c both.rs\0\
         assert_eq!(clone_name("git@github.com:rust-lang/rust"), "rust");
         assert_eq!(clone_name("https://github.com/a/b/"), "b");
         assert_eq!(clone_name("https://github.com/a/.git"), "repository");
+    }
+
+    #[test]
+    fn reads_clone_progress() {
+        let p = parse_progress("Receiving objects:  45% (450/1000), 1.20 MiB | 2.00 MiB/s").unwrap();
+        assert_eq!(p.phase, "Receiving objects");
+        assert_eq!((p.percent, p.done, p.total), (Some(45), Some(450), Some(1000)));
+        assert_eq!((p.received.as_deref(), p.speed.as_deref()), (Some("1.20 MiB"), Some("2.00 MiB/s")));
+        let p = parse_progress("Receiving objects: 100% (1000/1000), 5.00 MiB | 3.00 MiB/s, done.").unwrap();
+        assert_eq!((p.percent, p.speed.as_deref()), (Some(100), Some("3.00 MiB/s")));
+        let p = parse_progress("remote: Compressing objects: 100% (5/5), done.").unwrap();
+        assert_eq!((p.phase.as_str(), p.done, p.total, p.received), ("Compressing objects", Some(5), Some(5), None));
+        let p = parse_progress("remote: Enumerating objects: 1234, done.").unwrap();
+        assert_eq!((p.phase.as_str(), p.percent, p.done), ("Enumerating objects", None, Some(1234)));
+        assert_eq!(parse_progress("Resolving deltas:  30% (30/100)").unwrap().total, Some(100));
+        assert!(parse_progress("Cloning into 'cli'...").is_none());
+        assert!(parse_progress("fatal: repository 'x' not found").is_none());
+        assert!(parse_progress("remote: Total 1000 (delta 100), reused 900 (delta 90), pack-reused 0").is_none());
     }
 }
 

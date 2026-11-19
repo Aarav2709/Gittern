@@ -6,7 +6,7 @@ import { itemState } from '../components/ui';
 import { splitHighlighted } from '../lib/highlight';
 import { isNewer, newThreads } from '../lib/inbox';
 import { duration, fuzzyScore, parseLineHash, plural, routeFromUrl } from '../lib/util';
-import { remoteRoute, splitPatch } from '../pages/Desktop';
+import { nextCloneState, remoteRoute, splitPatch } from '../pages/Desktop';
 import { formBody, parseForm, parseTemplate } from '../pages/Issues';
 
 describe('routeFromUrl', () => {
@@ -270,5 +270,20 @@ body:
   it('writes the body github would', () => {
     const f = parseForm(yml, 'x');
     expect(formBody(f, { 1: 'It broke', 2: '2.0', 4: { 0: true } })).toBe('### What happened?\n\nIt broke\n\n### Version\n\n2.0\n\n### Logs\n\n_No response_\n\n### Terms\n\n- [X] I agree');
+  });
+});
+
+describe('nextCloneState', () => {
+  const ev = (phase: string, extra: object = {}) => ({ phase, percent: null, done: null, total: null, received: null, speed: null, ...extra });
+  it('follows git through its phases', () => {
+    let s = nextCloneState(null, ev('Cloning into cli'), 0);
+    expect(s.title).toBe('Cloning into cli');
+    s = nextCloneState(s, ev('Enumerating objects', { done: 10 }), 1);
+    s = nextCloneState(s, ev('Receiving objects', { percent: 50, done: 5, total: 10, received: '1.00 MiB', speed: '2.00 MiB/s' }), 2);
+    expect(s.finished).toEqual(['Enumerating objects']);
+    s = nextCloneState(s, ev('Resolving deltas', { percent: 10 }), 3);
+    expect(s.finished).toEqual(['Enumerating objects', 'Receiving objects']);
+    expect(s.received).toBe('1.00 MiB');
+    expect(s.started).toBe(0);
   });
 });

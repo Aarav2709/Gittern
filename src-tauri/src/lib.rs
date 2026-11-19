@@ -567,6 +567,7 @@ pub fn run() {
             git::add_local_repo,
             git::remove_local_repo,
             git::clone_repo,
+            git::cancel_clone,
             git::git_status,
             git::git_diff,
             git::git_commit,

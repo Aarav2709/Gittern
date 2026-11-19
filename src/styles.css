@@ -589,6 +589,20 @@ main.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column
 .local-welcome .toolbar { justify-content: center; }
 .clone-list { max-height: 46vh; }
 .clone-list > button { flex-shrink: 0; }
+.clone-progress { gap: 16px; padding-top: 10px; }
+.clone-progress-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.clone-progress-head .strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clone-progress-line { display: flex; justify-content: space-between; gap: 12px; color: var(--fg-muted); }
+.mono-num { font-variant-numeric: tabular-nums; }
+.progress > span { transition: width 0.15s ease-out; }
+.progress.indeterminate > span { width: 30%; animation: indeterminate 1.2s ease-in-out infinite; }
+@keyframes indeterminate { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.clone-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.clone-stats > div { padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: 8px; min-width: 0; }
+.clone-stats dt { color: var(--fg-faint); font-size: 12px; }
+.clone-stats dd { margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clone-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; color: var(--fg-muted); }
+.clone-steps li { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 860px) {
   .local-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr); }
   .local-list { border-right: 0; }
