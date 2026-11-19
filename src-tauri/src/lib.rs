@@ -530,7 +530,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // the title bar is drawn in the page, so never bring the system one back from saved state
+        .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::DECORATIONS).build())
         .setup(move |app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let settings = std::fs::read_to_string(&settings_path)

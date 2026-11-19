@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HashRouter, Route, Routes } from 'react-router-dom';
 import { Shell } from './components/Shell';
+import { Framed } from './components/Window';
 import { ConfirmHost, Empty, Loading, Toasts } from './components/ui';
 import { queryClient } from './lib/api';
 import { AuthProvider } from './lib/auth';
@@ -34,8 +35,16 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider
-        loading={<Loading label="Connecting to GitHub…" />}
-        fallback={(api, error) => <Login api={api} error={error} />}
+        loading={
+          <Framed>
+            <Loading label="Connecting to GitHub…" />
+          </Framed>
+        }
+        fallback={(api, error) => (
+          <Framed>
+            <Login api={api} error={error} />
+          </Framed>
+        )}
       >
         <HashRouter>
           <Routes>

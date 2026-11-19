@@ -54,6 +54,7 @@ import {
 import type { Repo } from '../lib/types';
 import { fuzzyScore, openExternal, routeFromUrl } from '../lib/util';
 import { Avatar, Dropdown, Modal, RepoGlyph } from './ui';
+import { WindowControls } from './Window';
 
 // tile in the text colour, glyph knocked out
 export function Logo({ size = 22 }: { size?: number }) {
@@ -326,7 +327,7 @@ export function Shell() {
       {narrow && overlay && <div className="backdrop" onClick={() => setOverlay(false)} />}
       {showSidebar && <Sidebar here={loc.pathname + loc.search} openPalette={() => setPalette(true)} showHelp={() => setHelp(true)} />}
       <div className="workspace">
-        <header className="tabbar">
+        <header className="tabbar" data-tauri-drag-region>
           <button className="icon-btn" onClick={toggleSidebar} title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">
             <SidebarCollapseIcon />
           </button>
@@ -336,7 +337,7 @@ export function Shell() {
           <button className="icon-btn" disabled={tab.idx >= tab.hist.length - 1} onClick={() => go(tabStep(1))} title="Forward (Alt+→)" aria-label="Forward">
             <ArrowRightIcon />
           </button>
-          <div className="tabs-strip" role="tablist">
+          <div className="tabs-strip" role="tablist" data-tauri-drag-region>
             {tabs.map((t) => {
               const d = describeTab(t.path);
               return (
@@ -378,6 +379,7 @@ export function Shell() {
           <button className={`icon-btn ${fetching ? 'spinning' : ''}`} onClick={() => queryClient.invalidateQueries()} title="Refresh (Ctrl+R)" aria-label="Refresh">
             <SyncIcon />
           </button>
+          <WindowControls />
         </header>
         <main ref={mainRef} className={loc.pathname === '/local' ? 'flush' : undefined}>
           <PageBoundary key={loc.pathname + loc.search}>
@@ -452,10 +454,10 @@ function Sidebar({ here, openPalette, showHelp }: { here: string; openPalette: (
 
   return (
     <aside className="sidebar" aria-label="Navigation">
-      <div className="side-brand">
+      <div className="side-brand" data-tauri-drag-region>
         <Logo size={20} />
-        <span>Gittern</span>
-        <span className="spacer" />
+        <span data-tauri-drag-region>Gittern</span>
+        <span className="spacer" data-tauri-drag-region />
         <div className="mode-switch" role="group" aria-label="Mode">
           <Link to="/" className={local ? '' : 'on'} title="GitHub" aria-label="GitHub mode" aria-current={local ? undefined : 'true'}>
             <MarkGithubIcon size={14} />
